@@ -1,55 +1,31 @@
-﻿from fastapi import APIRouter
+﻿from fastapi import APIRouter, Form, UploadFile, File
 from typing import Optional
-import pandas as pd
-import io
+from app.topic2_performance.services.cwv_checker import check_cwv
+from app.topic2_performance.services.metadata_checker import parse_metadata
+from app.topic2_performance.services.page_size_auditor import audit_performance_metrics
 
 router = APIRouter()
 
-async def run_topic2_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_bytes: Optional[bytes] = None):
-    results = {
-        "topic": "Topic 2: Performance & On-Page Metrics Audit",
-        "target_url": target_url
+async def run_topic2_full_audit(target_url: str, screaming_frog_bytes: Optional[bytes] = None):
+    cwv_data = check_cwv(target_url)
+    meta_data = parse_metadata(screaming_frog_bytes)
+    perf_data = audit_performance_metrics(target_url, screaming_frog_bytes)
+
+    return {
+        "status": "success",
+        "topic": "Topic 2: Performance Metrics",
+        "target_url": target_url,
+        "core_web_vitals": cwv_data,
+        "element_issues": meta_data["element_issues"],
+        "title_length_breakdown": meta_data["title_length"],
+        "description_length_breakdown": meta_data["description_length"],
+        "performance_overview": perf_data
     }
 
-    if not csv_bytes:
-        return {
-            "status": "success",
-            "data": {
-                **results,
-                "screaming_frog_parsed": False,
-                "notice": "No Screaming Frog CSV uploaded. Showing URL performance metrics only.",
-                "cwv_estimates": {
-                    "lcp_ms": 2100,
-                    "cls": 0.04,
-                    "fid_ms": 12
-                }
-            }
-        }
-
-    try:
-        df = pd.read_csv(io.BytesIO(csv_bytes), low_memory=False)
-        total_urls = len(df)
-        
-        status_counts = df['Status Code'].value_counts().to_dict() if 'Status Code' in df.columns else {}
-        missing_titles = int(df['Title 1'].isna().sum()) if 'Title 1' in df.columns else 0
-        missing_h1 = int(df['H1-1'].isna().sum()) if 'H1-1' in df.columns else 0
-
-        return {
-            "status": "success",
-            "data": {
-                **results,
-                "screaming_frog_parsed": True,
-                "total_urls_analyzed": total_urls,
-                "status_code_breakdown": {str(k): int(v) for k, v in status_counts.items()},
-                "metadata_issues": {
-                    "missing_titles": missing_titles,
-                    "missing_h1": missing_h1
-                }
-            }
-        }
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to parse Screaming Frog CSV: {str(e)}"}
-
-@router.get("/audit", summary="Run Topic 2 Audit directly")
-async def run_audit(target_url: Optional[str] = None, csv_bytes: Optional[bytes] = None):
-    return await run_topic2_full_audit(target_url=target_url or "https://www.bowlerhat.co.uk", csv_bytes=csv_bytes)
+@router.post("/audit", summary="Run Topic 2 Audit directly")
+async def run_audit(
+    target_url: str = Form(...),
+    screaming_frog_csv: Optional[UploadFile] = File(None)
+):
+    sf_bytes = await screaming_frog_csv.read() if screaming_frog_csv else None
+    return await run_topic2_full_audit(target_url=target_url, screaming_frog_bytes=sf_bytes)

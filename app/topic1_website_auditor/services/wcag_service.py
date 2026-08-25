@@ -1,65 +1,29 @@
+﻿import requests
 from bs4 import BeautifulSoup
-from curl_cffi import requests
-from pydantic import BaseModel
-from typing import List, Optional
 
-class WCAGIssue(BaseModel):
-    code: str
-    description: str
-    impact: str
-    element: Optional[str] = None
+def analyze_wcag(url: str):
+    if not url:
+        return {"critical": "No Data", "serious": "No Data", "moderate": "No Data", "minor": "No Data"}
+    
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    try:
+        res = requests.get(url, headers=headers, timeout=5, allow_redirects=True)
+        if res.status_code != 200:
+            return {"critical": "No Data", "serious": "No Data", "moderate": "No Data", "minor": "No Data"}
+        
+        soup = BeautifulSoup(res.text, "html.parser")
+        
+        # Count accessibility flaws
+        images_without_alt = len([img for img in soup.find_all("img") if not img.get("alt")])
+        inputs_without_label = len([inp for inp in soup.find_all("input") if not inp.get("id") or not soup.find("label", attrs={"for": inp.get("id")})])
+        missing_lang = 1 if not soup.find("html", attrs={"lang": True}) else 0
+        missing_title = 1 if not soup.find("title") else 0
 
-class WCAGAuditResult(BaseModel):
-    url: str
-    score: int
-    total_issues: int
-    issues: List[WCAGIssue]
-
-def run_wcag_checks(url: str, html_content: str) -> WCAGAuditResult:
-    soup = BeautifulSoup(html_content, "html.parser")
-    issues = []
-
-    # 1. Image Alt Attributes
-    images = soup.find_all("img")
-    for img in images:
-        if not img.has_attr("alt"):
-            issues.append(WCAGIssue(
-                code="1.1.1 Non-text Content",
-                description="Image missing alt attribute",
-                impact="Critical",
-                element=str(img)[:100]
-            ))
-
-    # 2. Page Title
-    if not soup.find("title") or not soup.find("title").string:
-        issues.append(WCAGIssue(
-            code="2.4.2 Page Titled",
-            description="Document missing <title> tag or title is empty",
-            impact="Serious",
-            element="<head>"
-        ))
-
-    # 3. HTML Language Attribute
-    html_tag = soup.find("html")
-    if not html_tag or not html_tag.has_attr("lang"):
-        issues.append(WCAGIssue(
-            code="3.1.1 Language of Page",
-            description="<html> tag missing lang attribute",
-            impact="Moderate",
-            element="<html>"
-        ))
-
-    total = len(issues)
-    score = max(0, 100 - (total * 5))
-
-    return WCAGAuditResult(
-        url=url,
-        score=score,
-        total_issues=total,
-        issues=issues
-    )
-
-async def fetch_and_audit_wcag(url: str) -> WCAGAuditResult:
-    response = requests.get(url, impersonate="chrome120", timeout=15)
-    response.raise_for_status()
-    return run_wcag_checks(url, response.text)
+        return {
+            "critical": missing_title + missing_lang,
+            "serious": inputs_without_label,
+            "moderate": images_without_alt,
+            "minor": 0
+        }
+    except Exception:
+        return {"critical": "No Data", "serious": "No Data", "moderate": "No Data", "minor": "No Data"}

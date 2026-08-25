@@ -1,51 +1,71 @@
-from fastapi import APIRouter, Query, UploadFile, File
-from typing import Dict, Any, Optional
+﻿import httpx
+from bs4 import BeautifulSoup
+from fastapi import APIRouter, Query
+from typing import Dict, Any
 
-from app.topic7_onpage_content_quality.services.thin_content_service import ThinContentService
-from app.topic7_onpage_content_quality.services.form_detection_service import FormDetectionService
-from app.topic7_onpage_content_quality.services.form_screenshot_service import FormScreenshotService
-from app.topic7_onpage_content_quality.services.form_placement_service import FormPlacementService
+router = APIRouter(prefix="/topic7", tags=["Topic 7: Content & Forms"])
 
-from app.topic7_onpage_content_quality.routes.thin_content_routes import router as thin_router
-from app.topic7_onpage_content_quality.routes.form_detection_routes import router as form_det_router
-from app.topic7_onpage_content_quality.routes.form_screenshot_routes import router as form_ss_router
-from app.topic7_onpage_content_quality.routes.form_placement_routes import router as form_place_router
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
 
-router = APIRouter()
+async def analyze_content_and_forms(target_url: str) -> Dict[str, Any]:
+    url = target_url.strip()
+    if not url:
+        return {"status": "error", "no_of_forms": "No Data", "cta_count": "No Data", "word_count": "No Data"}
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
 
-# Attach individual metric routes
-router.include_router(thin_router)
-router.include_router(form_det_router)
-router.include_router(form_ss_router)
-router.include_router(form_place_router)
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=HEADERS) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return {"status": "error", "no_of_forms": "No Data", "cta_count": "No Data", "word_count": "No Data"}
 
-thin_svc = ThinContentService()
-form_det_svc = FormDetectionService()
-form_ss_svc = FormScreenshotService()
-form_place_svc = FormPlacementService()
+            soup = BeautifulSoup(resp.text, "html.parser")
 
-class Topic7Aggregator:
-    async def run_full_audit(self, target_url: str, csv_bytes: Optional[bytes] = None) -> Dict[str, Any]:
-        thin_content_data = await thin_svc.analyze_thin_content(target_url, csv_bytes)
-        form_detection_data = await form_det_svc.detect_forms(target_url)
-        form_screenshots = await form_ss_svc.capture_form_breakdowns(target_url)
-        form_placement_data = await form_place_svc.calculate_placement(target_url)
+            forms = soup.find_all(["form", "iframe"])
+            form_wrappers = soup.select("div.wpcf7, div.gform_wrapper, div.hs-form")
+            total_forms = len(forms) + len(form_wrappers)
 
-        return {
-            "topic": "Topic 7: On-Page Content Quality Audit",
-            "target_url": target_url,
-            "thin_content_analysis": thin_content_data,
-            "form_detection": form_detection_data,
-            "form_visual_breakdowns": form_screenshots,
-            "form_placement_guidance": form_placement_data.get("form_placement_guidance", [])
-        }
+            ctas = soup.select("button, input[type='submit'], a.btn, a.button, a[class*='cta']")
 
-aggregator = Topic7Aggregator()
+            for element in soup(["script", "style", "nav", "footer"]):
+                element.extract()
+            text = soup.get_text(separator=" ")
+            words = len(text.split())
 
-@router.post("/audit-all")
-async def run_topic7_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_bytes: Optional[bytes] = None, file: Optional[UploadFile] = None):
-    if file and not csv_bytes:
-        csv_bytes = await file.read()
-    csv_bytes = await file.read() if file else None
-    data = await aggregator.run_full_audit(target_url, csv_bytes)
-    return {"status": "success", "data": data}
+            return {
+                "status": "success",
+                "no_of_forms": total_forms,
+                "cta_count": len(ctas),
+                "word_count": words
+            }
+    except Exception:
+        return {"status": "error", "no_of_forms": "No Data", "cta_count": "No Data", "word_count": "No Data"}
+
+async def run_topic7_full_audit(target_url: str):
+    clean_url = target_url.strip() if target_url else ""
+    analysis = await analyze_content_and_forms(clean_url)
+
+    return {
+        "status": "success",
+        "topic": "Topic 7: Content & Forms",
+        "target_url": clean_url or "No Data",
+        "summary": {
+            "no_of_forms": analysis["no_of_forms"],
+            "cta_count": analysis["cta_count"],
+            "word_count": analysis["word_count"]
+        },
+        "form_placement": [
+            {
+                "url": clean_url,
+                "has_form": analysis["no_of_forms"] > 0 if isinstance(analysis["no_of_forms"], int) else "No Data",
+                "form_count": analysis["no_of_forms"]
+            }
+        ]
+    }
+
+@router.post("/audit")
+async def run_audit(target_url: str = Query(..., description="Target website URL")):
+    return await run_topic7_full_audit(target_url=target_url)

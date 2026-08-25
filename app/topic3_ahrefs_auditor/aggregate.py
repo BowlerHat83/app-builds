@@ -1,77 +1,64 @@
-﻿from fastapi import APIRouter
+﻿from fastapi import APIRouter, Form, UploadFile, File
 from typing import Optional
-import pandas as pd
-import io
+from app.topic3_ahrefs_auditor.services.domain_rating_service import parse_backlinks_and_dr
+from app.topic3_ahrefs_auditor.services.traffic_impressions_service import parse_traffic_impressions
+from app.topic3_ahrefs_auditor.services.keyword_position_service import parse_avg_position
+from app.topic3_ahrefs_auditor.services.competitor_share_service import parse_competitor_share
+from app.topic3_ahrefs_auditor.services.top_keywords_service import parse_top_keywords
+from app.topic3_ahrefs_auditor.services.content_gap_service import parse_content_gaps
+from app.topic3_ahrefs_auditor.services.historic_traffic_service import parse_historic_traffic
 
 router = APIRouter()
 
-def read_csv_robust(csv_bytes: bytes) -> pd.DataFrame:
-    for encoding in ['utf-16', 'utf-8-sig', 'utf-8', 'latin1']:
-        try:
-            return pd.read_csv(io.BytesIO(csv_bytes), encoding=encoding, low_memory=False)
-        except (UnicodeDecodeError, Exception):
-            continue
-    raise ValueError("Unable to decode CSV with supported encodings (utf-16, utf-8, latin1).")
+async def run_topic3_full_audit(
+    target_url: str = "", 
+    organic_csv_bytes: Optional[bytes] = None,
+    ahrefs_csv_bytes: Optional[bytes] = None
+):
+    primary_csv = organic_csv_bytes or ahrefs_csv_bytes
+    
+    backlink_data = parse_backlinks_and_dr(primary_csv, target_url=target_url)
+    trf_imp = parse_traffic_impressions(primary_csv)
+    avg_pos = parse_avg_position(primary_csv)
+    comp_share = parse_competitor_share(primary_csv)
+    keywords = parse_top_keywords(primary_csv, target_url=target_url)
+    gaps = parse_content_gaps(primary_csv)
+    traffic_trend = parse_historic_traffic(primary_csv)
 
-async def run_topic3_full_audit(backlinks_bytes: Optional[bytes] = None, keywords_bytes: Optional[bytes] = None):
-    results = {
-        "topic": "Topic 3: Off-Page & Ahrefs Backlink Audit",
-        "backlinks_summary": "N/A",
-        "keywords_summary": "N/A"
+    # Derive impression/click metrics if live URL scanned without CSV
+    total_imp = trf_imp["total_imp"] if trf_imp["total_imp"] != "No Data" else (sum(k["imp"] for k in keywords) if keywords else "No Data")
+    total_clicks = trf_imp["total_clicks"] if trf_imp["total_clicks"] != "No Data" else (sum(k["clicks"] for k in keywords) if keywords else "No Data")
+    avg_keyword_pos = avg_pos if avg_pos != "No Data" else (round(sum(k["pos"] for k in keywords)/len(keywords), 1) if keywords else "No Data")
+
+    return {
+        "status": "success",
+        "topic": "Topic 3: Organic Visibility",
+        "target_url": target_url,
+        "overview_cards": {
+            "dr": backlink_data["dr"],
+            "total_imp": total_imp,
+            "total_clicks": total_clicks,
+            "avg_keyword_position": avg_keyword_pos,
+            "backlinks": backlink_data["total_backlinks"],
+            "referring_domains": backlink_data["referring_domains"]
+        },
+        "competitor_breakdown": comp_share,
+        "keywords": keywords,
+        "content_gaps": gaps,
+        "organic_traffic_trend": traffic_trend
     }
 
-    if not backlinks_bytes and not keywords_bytes:
-        return {
-            "status": "skipped",
-            "data": results,
-            "reason": "No Ahrefs CSV exports provided"
-        }
-
-    # Parse Backlinks CSV
-    if backlinks_bytes:
-        try:
-            df_bl = read_csv_robust(backlinks_bytes)
-            total_backlinks = len(df_bl)
-            
-            ref_col = next((c for c in ['Referring Domain', 'Domain Rating', 'Domain'] if c in df_bl.columns), None)
-            ref_domains = int(df_bl[ref_col].nunique()) if ref_col else total_backlinks
-            
-            type_col = next((c for c in ['Type', 'Link type'] if c in df_bl.columns), None)
-            dofollow_count = int((df_bl[type_col] == 'Dofollow').sum()) if type_col else total_backlinks
-
-            results["backlinks_summary"] = {
-                "total_backlinks": total_backlinks,
-                "unique_referring_domains": ref_domains,
-                "dofollow_backlinks": dofollow_count,
-                "nofollow_backlinks": total_backlinks - dofollow_count
-            }
-        except Exception as e:
-            results["backlinks_summary"] = {"error": f"Failed to parse Backlinks CSV: {str(e)}"}
-
-    # Parse Organic Keywords CSV
-    if keywords_bytes:
-        try:
-            df_kw = read_csv_robust(keywords_bytes)
-            total_keywords = len(df_kw)
-            
-            pos_col = next((c for c in ['Position', 'Current position'] if c in df_kw.columns), None)
-            top_3 = int((df_kw[pos_col] <= 3).sum()) if pos_col else 0
-            top_10 = int((df_kw[pos_col] <= 10).sum()) if pos_col else 0
-            
-            vol_col = next((c for c in ['Volume', 'Search Volume'] if c in df_kw.columns), None)
-            total_volume = int(df_kw[vol_col].sum()) if vol_col else 0
-
-            results["keywords_summary"] = {
-                "total_ranked_keywords": total_keywords,
-                "top_3_positions": top_3,
-                "top_10_positions": top_10,
-                "estimated_search_volume": total_volume
-            }
-        except Exception as e:
-            results["keywords_summary"] = {"error": f"Failed to parse Keywords CSV: {str(e)}"}
-
-    return {"status": "success", "data": results}
-
-@router.get("/audit", summary="Run Topic 3 Audit directly")
-async def run_audit(backlinks_bytes: Optional[bytes] = None, keywords_bytes: Optional[bytes] = None):
-    return await run_topic3_full_audit(backlinks_bytes=backlinks_bytes, keywords_bytes=keywords_bytes)
+@router.post("/audit", summary="Run Topic 3 Audit directly")
+async def run_audit(
+    target_url: str = Form(""),
+    organic_csv: Optional[UploadFile] = File(None),
+    ahrefs_csv: Optional[UploadFile] = File(None)
+):
+    org_bytes = await organic_csv.read() if organic_csv and organic_csv.filename else None
+    ahr_bytes = await ahrefs_csv.read() if ahrefs_csv and ahrefs_csv.filename else None
+    
+    return await run_topic3_full_audit(
+        target_url=target_url, 
+        organic_csv_bytes=org_bytes,
+        ahrefs_csv_bytes=ahr_bytes
+    )

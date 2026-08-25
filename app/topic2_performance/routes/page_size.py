@@ -1,13 +1,13 @@
-﻿from fastapi import APIRouter, Query, HTTPException
-from app.topic2_performance.services.page_size_auditor import analyze_page_size
+﻿from fastapi import APIRouter, Form, UploadFile, File
+from typing import Optional
+from app.topic2_performance.services.page_size_auditor import audit_performance_metrics
 
-router = APIRouter(prefix="/api/topic2/page-size", tags=["Topic 2 - Page Size"])
+router = APIRouter()
 
-@router.post("/check", summary="Analyze Total Page Weight & Asset Breakdown (Pingdom-Style)")
-async def check_page_size(
-    url: str = Query(..., description="Target URL to analyze (e.g. https://example.com)")
+@router.post("/page-size", summary="Audit Page Size & Performance")
+async def get_page_size(
+    target_url: str = Form(...),
+    screaming_frog_csv: Optional[UploadFile] = File(None)
 ):
-    result = await analyze_page_size(url=url)
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result)
-    return result
+    content = await screaming_frog_csv.read() if screaming_frog_csv else None
+    return audit_performance_metrics(target_url, content)
