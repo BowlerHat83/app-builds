@@ -23,6 +23,7 @@ async def run_full_audit(
     target_url: Optional[str] = None,
     brightlocal_bytes: Optional[bytes] = None,
     extra_keywords: Optional[list] = None,
+    prewarm_job: Optional[dict] = None,
     **_ignored,
 ) -> dict:
     """
@@ -32,6 +33,12 @@ async def run_full_audit(
     or explicitly marked unavailable - never a fabricated number or someone
     else's testimonials dressed up as this client's reviews, which is what
     this topic used to silently return.
+
+    prewarm_job, if provided, is a dict from app/common/prewarm_jobs.py -
+    when its screenshot_task was already kicked off during the intake
+    flow's first screen (only possible if business_name/target_location
+    were both supplied there), this awaits that instead of launching a
+    fresh capture.
     """
     warnings: list = []
     api_key = os.environ.get("SERPAPI_KEY")
@@ -99,9 +106,10 @@ async def run_full_audit(
     if reviews_warn:
         warnings.append(reviews_warn)
 
-    screenshot, screenshot_warn = await safe_check(
-        screenshot_svc.capture_screenshot(business_name, target_location), "GBP screenshot capture", timeout=45
+    screenshot_awaitable = (prewarm_job or {}).get("screenshot_task") or screenshot_svc.capture_screenshot(
+        business_name, target_location
     )
+    screenshot, screenshot_warn = await safe_check(screenshot_awaitable, "GBP screenshot capture", timeout=45)
     if screenshot_warn:
         warnings.append(screenshot_warn)
 

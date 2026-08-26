@@ -10,8 +10,39 @@ from app.topic4_ai_visibility.aggregate import run_full_audit as run_topic4_audi
 from app.topic5_paid_visibility.aggregate import run_full_audit as run_topic5_audit
 from app.topic6_local_visibility.aggregate import run_full_audit as run_topic6_audit
 from app.topic7_onpage_content_quality.aggregate import run_full_audit as run_topic7_audit
+from app.common.prewarm_jobs import create_job, take_job
 
 router = APIRouter()
+
+
+@router.post(
+    "/audit-prewarm",
+    tags=["Master Audit"],
+    summary="Pre-warm Chromium-based checks ahead of the full audit",
+)
+async def prewarm_audit(
+    target_url: str = Form(..., description="Target website URL"),
+    business_name: Optional[str] = Form(
+        None, description="Business name - if supplied together with target_location, also pre-warms the GBP screenshot check"
+    ),
+    target_location: Optional[str] = Form(
+        None, description="City/location - if supplied together with business_name, also pre-warms the GBP screenshot check"
+    ),
+):
+    """
+    Kicks off WCAG, GDPR, and (if business_name + target_location are both
+    given) the GBP screenshot check in the background, and returns a job_id
+    immediately - this call itself does no waiting. Intended to be called
+    the moment the intake form's first screen (the three string inputs) is
+    submitted, so that work is already running while the person is still on
+    the CSV-upload screen. Pass the returned job_id back to /audit-master to
+    pick up whatever finished in the meantime instead of starting fresh.
+
+    Never required - /audit-master works exactly as before with no job_id
+    at all, just without the head start.
+    """
+    job_id = create_job(target_url, business_name, target_location)
+    return {"job_id": job_id}
 
 
 async def _safe(coro, topic_label: str) -> dict:
@@ -93,6 +124,9 @@ async def run_master_audit(
     ppc_keywords_csv: Optional[UploadFile] = File(None, description="PPC keyword-research export - feeds Topic 5"),
     ppc_competitors_csv: Optional[UploadFile] = File(None, description="PPC competitor-overlap export - feeds Topic 5"),
     brightlocal_csv: Optional[UploadFile] = File(None, description="BrightLocal Citation Tracker export - feeds Topic 6"),
+    job_id: Optional[str] = Form(
+        None, description="job_id returned by /audit-prewarm, if the two-step intake flow was used - omit to run everything fresh"
+    ),
 ):
     sf_bytes = await screaming_frog_csv.read() if screaming_frog_csv else None
     ahrefs_backlinks_bytes = await ahrefs_backlinks_csv.read() if ahrefs_backlinks_csv else None
@@ -109,8 +143,10 @@ async def run_master_audit(
     # parallel with them anymore - those six run together first, then Topic 6
     # runs once their keyword data is available. Everything else about the
     # request (upload parsing, error isolation via _safe) is unchanged.
+    prewarm_job = take_job(job_id)
+
     t1, t2, t3, t4, t5, t7 = await asyncio.gather(
-        _safe(run_topic1_audit(target_url=target_url), "Topic 1"),
+        _safe(run_topic1_audit(target_url=target_url, prewarm_job=prewarm_job), "Topic 1"),
         _safe(run_topic2_audit(target_url=target_url, csv_bytes=sf_bytes), "Topic 2"),
         _safe(
             run_topic3_audit(
@@ -137,6 +173,7 @@ async def run_master_audit(
             target_url=target_url,
             brightlocal_bytes=brightlocal_bytes,
             extra_keywords=extra_keywords,
+            prewarm_job=prewarm_job,
         ),
         "Topic 6",
     )

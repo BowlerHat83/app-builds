@@ -18,7 +18,11 @@ def _run_sync(coro_fn, *args):
     return asyncio.run(coro_fn(*args))
 
 
-async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", **_ignored) -> dict:
+async def run_full_audit(
+    target_url: str = "https://www.bowlerhat.co.uk",
+    prewarm_job: Optional[dict] = None,
+    **_ignored,
+) -> dict:
     """
     Topic 1: Technical Standards, WCAG Accessibility, GDPR/Cookie Compliance.
 
@@ -27,6 +31,12 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", **_ign
     Each is wrapped in safe_check so a single slow/broken check (GDPR's
     Playwright pass is the heaviest) degrades to a warning instead of
     failing the whole topic.
+
+    prewarm_job, if provided, is a dict from app/common/prewarm_jobs.py -
+    when its wcag_task/gdpr_task were already kicked off during the intake
+    flow's first screen, this awaits those instead of launching fresh ones,
+    so a request that arrives well after Screen 1 can pick up work that's
+    already finished (or nearly finished) rather than starting from zero.
     """
     url = normalize_url(target_url)
     if not url:
@@ -60,13 +70,15 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", **_ign
     # queue behind Topic 7 and still complete. This only affects the ceiling
     # for a slow/stuck run; a normal WCAG or GDPR pass (a handful of seconds)
     # finishes just as fast as before.
-    wcag_result, wcag_warn = await safe_check(fetch_and_audit_wcag(url), "WCAG audit", timeout=90)
+    wcag_awaitable = (prewarm_job or {}).get("wcag_task") or fetch_and_audit_wcag(url)
+    wcag_result, wcag_warn = await safe_check(wcag_awaitable, "WCAG audit", timeout=90)
     html_result, html_warn = await safe_check(
         asyncio.to_thread(_run_sync, fetch_and_validate_html, url), "HTML syntax validation", timeout=20
     )
 
     # GDPR spins up a full headless browser - same queueing reasoning as WCAG above.
-    gdpr_result, gdpr_warn = await safe_check(run_gdpr_audit(url), "GDPR/cookie banner audit", timeout=90)
+    gdpr_awaitable = (prewarm_job or {}).get("gdpr_task") or run_gdpr_audit(url)
+    gdpr_result, gdpr_warn = await safe_check(gdpr_awaitable, "GDPR/cookie banner audit", timeout=90)
 
     for w in (ssl_warn, sitemap_warn, sitemap_urls_warn, wcag_warn, html_warn, gdpr_warn):
         if w:
