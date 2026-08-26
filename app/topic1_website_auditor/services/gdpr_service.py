@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from app.common.browser_lock import CHROMIUM_SLOT
+
 
 class MandatoryPolicies(BaseModel):
     privacy_policy: bool
@@ -175,5 +177,7 @@ def _sync_run_gdpr_audit(url: str) -> GDPRCheckResult:
 
 
 async def run_gdpr_audit(url: str) -> GDPRCheckResult:
-    return await asyncio.to_thread(_sync_run_gdpr_audit, url)
+    # Only one Chromium-based check runs at a time - see app/common/browser_lock.py
+    async with CHROMIUM_SLOT:
+        return await asyncio.to_thread(_sync_run_gdpr_audit, url)
 

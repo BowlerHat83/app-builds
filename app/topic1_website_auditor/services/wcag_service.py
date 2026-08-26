@@ -34,6 +34,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
+from app.common.browser_lock import CHROMIUM_SLOT
+
 # Where to drop axe.min.js to switch this over to the real engine - see the
 # module docstring above. No code changes needed once it's here; this is
 # checked fresh on every audit run, not just at import time.
@@ -442,7 +444,9 @@ def _build_result(
 
 
 async def fetch_and_audit_wcag(url: str) -> WCAGAuditResult:
-    result = await asyncio.to_thread(_run_wcag_checks_sync, url)
+    # Only one Chromium-based check runs at a time - see app/common/browser_lock.py
+    async with CHROMIUM_SLOT:
+        result = await asyncio.to_thread(_run_wcag_checks_sync, url)
     return _build_result(
         url,
         result["raw_issues"],

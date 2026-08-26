@@ -27,6 +27,8 @@ import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+from app.common.browser_lock import CHROMIUM_SLOT
+
 # Loose call-to-action matcher used to estimate "average CTAs per page" -
 # counts <a>/<button> elements whose visible text reads like an action
 # prompt, or whose class/id names them as one (cta / btn-primary / etc),
@@ -370,6 +372,8 @@ class FormDetectionService:
     ) -> Dict[str, Any]:
         output_dir = output_dir or os.path.abspath("app/static/screenshots/forms")
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, self._crawl_sync, candidate_urls, output_dir, max_screenshots, time_budget_s
-        )
+        # Only one Chromium-based check runs at a time - see app/common/browser_lock.py
+        async with CHROMIUM_SLOT:
+            return await loop.run_in_executor(
+                None, self._crawl_sync, candidate_urls, output_dir, max_screenshots, time_budget_s
+            )

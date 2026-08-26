@@ -3,6 +3,8 @@ import urllib.parse
 import asyncio
 from typing import Dict, Any
 
+from app.common.browser_lock import CHROMIUM_SLOT
+
 class GBPScreenshotService:
     def _capture_sync(self, query: str, filepath: str):
         from playwright.sync_api import sync_playwright
@@ -89,7 +91,9 @@ class GBPScreenshotService:
 
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._capture_sync, query, filepath)
+            # Only one Chromium-based check runs at a time - see app/common/browser_lock.py
+            async with CHROMIUM_SLOT:
+                await loop.run_in_executor(None, self._capture_sync, query, filepath)
 
             return {
                 "business_name": business_name,
