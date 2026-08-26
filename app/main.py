@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 
 from app.routes.master_audit import router as master_router
+from app.routes.audit_jobs import router as audit_jobs_router
 from app.topic1_website_auditor.aggregate import router as t1_router
 from app.topic2_performance.aggregate import router as t2_router
 from app.topic3_ahrefs_auditor.aggregate import router as t3_router
@@ -39,6 +40,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Mount Master Orchestrator
 app.include_router(master_router)
+app.include_router(audit_jobs_router)
 
 # Mount Topic Routers
 app.include_router(t1_router, prefix="/topic1", tags=["Topic 1: Technical & On-Page"])
