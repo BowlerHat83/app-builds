@@ -1,37 +1,59 @@
 ﻿import io
-import requests
 import pandas as pd
-from bs4 import BeautifulSoup
 
-def parse_backlinks_and_dr(csv_bytes: bytes = None, target_url: str = ""):
-    if csv_bytes:
+def parse_domain_rating_csv(file_bytes: bytes) -> dict:
+    """
+    Parses Ahrefs Organic Competitors CSV to extract Competitor Domain Rating metrics.
+    Robustly handles UTF-16, UTF-16-LE, and UTF-8 encodings from Ahrefs exports.
+    """
+    df = None
+    encodings_to_try = [
+        ("utf-16", "\t"),
+        ("utf-16-le", "\t"),
+        ("utf-8-sig", ","),
+        ("utf-8", ",")
+    ]
+
+    for enc, sep in encodings_to_try:
         try:
-            df = pd.read_csv(io.BytesIO(csv_bytes))
-            dr_col = [c for c in df.columns if any(k in c.lower() for k in ['dr', 'domain rating'])]
-            bl_col = [c for c in df.columns if any(k in c.lower() for k in ['backlinks', 'links'])]
-            ref_col = [c for c in df.columns if any(k in c.lower() for k in ['referring', 'refdomains'])]
-
-            dr_val = str(int(df[dr_col[0]].dropna().iloc[0])) if dr_col and not df[dr_col[0]].dropna().empty else "No Data"
-            total_bl = int(df[bl_col[0]].sum()) if bl_col else len(df)
-            ref_doms = int(df[ref_col[0]].dropna().iloc[0]) if ref_col and not df[ref_col[0]].dropna().empty else "No Data"
-
-            return {"dr": dr_val, "total_backlinks": total_bl, "referring_domains": ref_doms}
+            temp_df = pd.read_csv(io.BytesIO(file_bytes), encoding=enc, sep=sep)
+            if len(temp_df.columns) > 1:
+                df = temp_df
+                break
         except Exception:
-            pass
+            continue
 
-    if target_url:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            res = requests.get(target_url, headers=headers, timeout=5, allow_redirects=True)
-            if res.status_code == 200:
-                soup = BeautifulSoup(res.text, "html.parser")
-                ext_links = len([a for a in soup.find_all("a", href=True) if "http" in a["href"] and target_url not in a["href"]])
-                return {
-                    "dr": "45",
-                    "total_backlinks": max(ext_links * 12, 150),
-                    "referring_domains": max(ext_links * 2, 25)
-                }
-        except Exception:
-            pass
+    if df is None:
+        raise ValueError("Could not parse CSV file. Ensure it is a valid Ahrefs export.")
 
-    return {"dr": "No Data", "total_backlinks": "No Data", "referring_domains": "No Data"}
+    # Standardize column headers
+    df.columns = [str(col).strip().lower().replace(" ", "_") for col in df.columns]
+
+    dr_col = next((c for c in df.columns if c in ["dr", "domain_rating"]), None)
+    domain_col = next((c for c in df.columns if c in ["domain", "competitor"]), None)
+
+    if not dr_col:
+        raise ValueError(f"CSV missing 'DR' column. Columns found: {list(df.columns)}")
+
+    df[dr_col] = pd.to_numeric(df[dr_col], errors="coerce")
+    df = df.dropna(subset=[dr_col])
+
+    avg_dr = round(float(df[dr_col].mean()), 2)
+    max_dr = float(df[dr_col].max())
+    min_dr = float(df[dr_col].min())
+
+    competitor_list = []
+    if domain_col:
+        top_comps = df[[domain_col, dr_col]].head(10)
+        competitor_list = top_comps.to_dict(orient="records")
+
+    return {
+        "status": "success",
+        "metrics": {
+            "average_competitor_dr": avg_dr,
+            "max_competitor_dr": max_dr,
+            "min_competitor_dr": min_dr,
+            "total_competitors_analyzed": len(df)
+        },
+        "top_competitors": competitor_list
+    }

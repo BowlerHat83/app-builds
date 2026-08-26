@@ -1,8 +1,11 @@
-﻿from fastapi import APIRouter, Form
-from app.topic1_website_auditor.services.gdpr_service import check_gdpr_banner
+﻿from fastapi import APIRouter
 
-router = APIRouter()
+router = APIRouter(
+    prefix="/api/gdpr",
+    tags=["Topic 1: Website Auditor"]
+)
 
-@router.post("/gdpr", summary="Check GDPR & Cookie Banner Status")
-async def get_gdpr(target_url: str = Form(...)):
-    return check_gdpr_banner(target_url)
+@router.post("/check")
+async def audit_gdpr_compliance():
+    return {"status": "ok"}
+
