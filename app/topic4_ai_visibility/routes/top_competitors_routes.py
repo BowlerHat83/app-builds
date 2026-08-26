@@ -1,20 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
-import pandas as pd
-import io
-from app.topic4_ai_visibility.services.top_competitors_service import process_top_competitors
+﻿from fastapi import APIRouter, UploadFile, File
+from typing import Optional
+from app.topic4_ai_visibility.services.top_competitors_service import parse_top_competitors
 
-router = APIRouter(tags=["Topic 4: AI Visibility"])
+router = APIRouter()
 
-@router.post("/top-competitors")
-async def calculate_top_competitors(
-    sources_file: UploadFile = File(..., description="The Knowledge Sources CSV export"),
-    limit: int = Query(10, description="Number of top competitors to return")
-):
-    try:
-        sources_contents = await sources_file.read()
-        sources_df = pd.read_csv(io.BytesIO(sources_contents))
-
-        result = process_top_competitors(sources_df, limit=limit)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing CSV file: {str(e)}")
+@router.post("/top-competitors", summary="Get Competitor Breakdown")
+async def get_competitors(ai_csv: Optional[UploadFile] = File(None)):
+    b = await ai_csv.read() if ai_csv and ai_csv.filename else None
+    return parse_top_competitors(b)

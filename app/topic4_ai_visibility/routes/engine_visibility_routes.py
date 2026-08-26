@@ -1,23 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
-import pandas as pd
-import io
-from app.topic4_ai_visibility.services.engine_visibility_service import process_engine_visibility
+﻿from fastapi import APIRouter, Form, UploadFile, File
+from typing import Optional
+from app.topic4_ai_visibility.services.engine_visibility_service import get_engine_visibility
 
-router = APIRouter(tags=["Topic 4: AI Visibility"])
+router = APIRouter()
 
-@router.post("/engine-visibility-breakdown")
-async def calculate_engine_visibility_breakdown(
-    facts_file: UploadFile = File(..., description="The Facts CSV export"),
-    sources_file: UploadFile = File(..., description="The Knowledge Sources CSV export")
-):
-    try:
-        facts_contents = await facts_file.read()
-        sources_contents = await sources_file.read()
-
-        facts_df = pd.read_csv(io.BytesIO(facts_contents))
-        sources_df = pd.read_csv(io.BytesIO(sources_contents))
-
-        result = process_engine_visibility(facts_df, sources_df)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing CSV files: {str(e)}")
+@router.post("/engine-visibility", summary="Get Engine Visibility Metrics")
+async def get_engines(target_url: str = Form(""), ai_csv: Optional[UploadFile] = File(None)):
+    b = await ai_csv.read() if ai_csv and ai_csv.filename else None
+    return get_engine_visibility(b, target_url=target_url)
