@@ -171,7 +171,15 @@ class FormDetectionService:
         total_ctas_found = 0
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                # No launch args at all previously - running as root with no
+                # sandbox flags in a Docker container is a common cause of
+                # Chromium failing to launch outright, and without
+                # --disable-dev-shm-usage this is also the heaviest of the
+                # four browser launches (up to 30 pages + screenshots).
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+            )
             context = browser.new_context(
                 viewport={"width": 1400, "height": 900},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",

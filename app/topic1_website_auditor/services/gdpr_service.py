@@ -51,7 +51,12 @@ def _sync_run_gdpr_audit(url: str) -> GDPRCheckResult:
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
+            # --disable-dev-shm-usage matters a lot in Docker specifically -
+            # containers default to a tiny 64MB /dev/shm and Chromium leans
+            # on shared memory heavily, so without this it can crash/hang
+            # under real load instead of just using more of the host's
+            # regular (much larger) memory.
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         )
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
