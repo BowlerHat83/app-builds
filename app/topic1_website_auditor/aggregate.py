@@ -48,13 +48,25 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", **_ign
     # via asyncio.to_thread internally, same pattern as GDPR below) and gets
     # a longer budget - it renders a real page and runs ~15 checks against
     # it (including a contrast-ratio scan), not a single curl_cffi fetch.
-    wcag_result, wcag_warn = await safe_check(fetch_and_audit_wcag(url), "WCAG audit", timeout=35)
+    #
+    # Both WCAG and GDPR now share a single-slot Chromium semaphore with
+    # Topic 6's screenshot capture and Topic 7's form crawl (see
+    # app/common/browser_lock.py - only one headless browser runs at a time
+    # across the whole audit, to stay inside free-tier RAM limits). Topic 7's
+    # crawl alone can legitimately hold that slot for up to 100s, and it runs
+    # concurrently with Topic 1 from master_audit.py. A 35s timeout here was
+    # timing these two out just from queueing for a turn, before they ever
+    # got to actually run - 90s gives enough room to wait out a worst-case
+    # queue behind Topic 7 and still complete. This only affects the ceiling
+    # for a slow/stuck run; a normal WCAG or GDPR pass (a handful of seconds)
+    # finishes just as fast as before.
+    wcag_result, wcag_warn = await safe_check(fetch_and_audit_wcag(url), "WCAG audit", timeout=90)
     html_result, html_warn = await safe_check(
         asyncio.to_thread(_run_sync, fetch_and_validate_html, url), "HTML syntax validation", timeout=20
     )
 
-    # GDPR spins up a full headless browser - give it the longest budget.
-    gdpr_result, gdpr_warn = await safe_check(run_gdpr_audit(url), "GDPR/cookie banner audit", timeout=35)
+    # GDPR spins up a full headless browser - same queueing reasoning as WCAG above.
+    gdpr_result, gdpr_warn = await safe_check(run_gdpr_audit(url), "GDPR/cookie banner audit", timeout=90)
 
     for w in (ssl_warn, sitemap_warn, sitemap_urls_warn, wcag_warn, html_warn, gdpr_warn):
         if w:
