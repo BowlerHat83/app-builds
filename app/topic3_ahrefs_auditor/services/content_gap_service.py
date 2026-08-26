@@ -1,5 +1,34 @@
 ﻿import io
+import re
 import pandas as pd
+
+# A "content gap" should be a topic the client could plausibly write about.
+# Ahrefs Organic Keywords exports sometimes include bare navigational/brand
+# queries for OTHER companies' domains (people searching "yell.com" itself,
+# a directory's own name, etc.) where the client's page ranking for it is
+# usually just a directory listing - there's no content opportunity in
+# writing a page targeting someone else's domain name. These are filtered
+# out below rather than surfaced as if they were real topic opportunities.
+_DOMAIN_LOOKALIKE_RE = re.compile(r'^[a-z0-9-]+(\.[a-z0-9-]+)+$', re.IGNORECASE)
+_KNOWN_DIRECTORY_DOMAINS = {
+    "yell.com", "yelp.com", "yelp.co.uk", "thomsonlocal.com", "tripadvisor.com",
+    "tripadvisor.co.uk", "facebook.com", "linkedin.com", "instagram.com",
+    "twitter.com", "x.com", "google.com", "maps.google.com", "bing.com",
+    "checkatrade.com", "trustpilot.com", "wikipedia.org", "indeed.com",
+    "glassdoor.com", "reddit.com", "youtube.com", "crunchbase.com",
+    "bloomberg.com", "companieshouse.gov.uk",
+}
+
+
+def _is_navigational_domain_keyword(keyword: str) -> bool:
+    """True if a keyword is just a bare domain name, not a real content topic."""
+    kw = str(keyword).strip().lower()
+    if not kw:
+        return False
+    if kw in _KNOWN_DIRECTORY_DOMAINS:
+        return True
+    return bool(_DOMAIN_LOOKALIKE_RE.match(kw))
+
 
 def parse_content_gaps_csv(file_bytes: bytes, limit: int = 25) -> dict:
     """
@@ -46,6 +75,10 @@ def parse_content_gaps_csv(file_bytes: bytes, limit: int = 25) -> dict:
         gap_df = df[gap_condition].copy()
     else:
         gap_df = df.copy()
+
+    # Drop bare-domain / directory navigational queries - see
+    # _is_navigational_domain_keyword above.
+    gap_df = gap_df[~gap_df[kw_col].apply(_is_navigational_domain_keyword)]
 
     # Sort gaps by highest potential search volume descending
     gap_df_sorted = gap_df.sort_values(by=[vol_col, kd_col], ascending=[False, True]).head(limit)

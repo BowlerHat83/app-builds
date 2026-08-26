@@ -1,12 +1,127 @@
-﻿from fastapi import APIRouter
 from typing import Optional
+
+from fastapi import APIRouter, File, UploadFile
+
+from app.common.audit_helpers import envelope, hostname_of, read_csv_robust
+from app.topic4_ai_visibility.services.engine_visibility_service import process_engine_visibility
+from app.topic4_ai_visibility.services.top_competitors_service import process_top_competitors
+from app.topic4_ai_visibility.services.top_keywords_service import process_top_keywords
+from app.topic4_ai_visibility.services.top_urls_service import process_top_target_urls, process_top_urls
 
 router = APIRouter()
 
-@router.get("/audit", summary="Run Topic 4 Audit")
-async def run_audit(target_url: Optional[str] = None, waykey_bytes: Optional[bytes] = None):
-    return {
-        "status": "success",
-        "message": "Topic 4 AI visibility audit executed.",
-        "has_waykey": waykey_bytes is not None
+ENGINES = ["gemini", "chatgpt", "claude", "sonar"]
+
+
+async def run_full_audit(
+    facts_bytes: Optional[bytes] = None,
+    sources_bytes: Optional[bytes] = None,
+    target_url: Optional[str] = None,
+    **_ignored,
+) -> dict:
+    """
+    Topic 4: AI Visibility.
+
+    facts_bytes is the AI-visibility tracker's "facts" export (Date, Prompt,
+    Fact, LLM Model, Status). sources_bytes is that same tool's "knowledge
+    sources" export (Source, Category, Matched Entities, Total Citations,
+    URL, Models Breakdown). Both are needed - engine visibility needs both,
+    the other three panels only need sources.
+    """
+    warnings: list = []
+    data = {
+        "topic": "Topic 4: AI Visibility Audit",
+        "engine_visibility": None,
+        "top_competitors": None,
+        "top_keywords": None,
+        "top_urls": None,
+        "top_target_urls": None,
+        "summary": None,
     }
+
+    facts_df = None
+    sources_df = None
+
+    if facts_bytes:
+        try:
+            facts_df = read_csv_robust(facts_bytes)
+        except Exception as e:
+            warnings.append(f"Facts CSV parse failed: {e}")
+    else:
+        warnings.append("No AI-visibility facts CSV uploaded.")
+
+    if sources_bytes:
+        try:
+            sources_df = read_csv_robust(sources_bytes)
+        except Exception as e:
+            warnings.append(f"Sources CSV parse failed: {e}")
+    else:
+        warnings.append("No AI-visibility knowledge-sources CSV uploaded.")
+
+    if facts_df is not None and sources_df is not None:
+        result = process_engine_visibility(facts_df, sources_df)
+        data["engine_visibility"] = result
+    elif facts_df is None and sources_df is None:
+        pass
+    else:
+        warnings.append("Engine visibility breakdown needs both the facts CSV and the sources CSV.")
+
+    if sources_df is not None:
+        for key, fn in (
+            ("top_competitors", process_top_competitors),
+            ("top_keywords", process_top_keywords),
+            ("top_urls", process_top_urls),
+        ):
+            try:
+                result = fn(sources_df)
+                if result.get("status") == "error":
+                    warnings.append(f"{key}: {result.get('message')}")
+                else:
+                    data[key] = result
+            except Exception as e:
+                warnings.append(f"{key} failed: {e}")
+
+        target_domain = hostname_of(target_url) if target_url else ""
+        if target_domain:
+            try:
+                result = process_top_target_urls(sources_df, target_domain)
+                if result.get("status") == "error":
+                    warnings.append(f"top_target_urls: {result.get('message')}")
+                else:
+                    data["top_target_urls"] = result
+            except Exception as e:
+                warnings.append(f"top_target_urls failed: {e}")
+        else:
+            warnings.append("No target_url supplied - can't scope citations to the target domain's own pages.")
+
+    engines_seen = 0
+    cited_urls = 0
+    cited_terms = 0
+    if data["engine_visibility"]:
+        breakdown = data["engine_visibility"].get("engine_visibility_breakdown", [])
+        engines_seen = sum(1 for e in breakdown if e.get("keyword_count", 0) > 0 or e.get("source_count", 0) > 0)
+    if sources_df is not None and "URL" in sources_df.columns:
+        cited_urls = int(sources_df["URL"].dropna().nunique())
+    if facts_df is not None and "Prompt" in facts_df.columns:
+        cited_terms = int(facts_df["Prompt"].dropna().nunique())
+
+    data["summary"] = {
+        "engine_visibility_ratio": f"{engines_seen}/{len(ENGINES)}",
+        "cited_urls_count": cited_urls,
+        "cited_search_terms_count": cited_terms,
+    }
+
+    return envelope("Topic 4: AI Visibility Audit", data, warnings)
+
+
+@router.post("/audit-all", summary="Run Topic 4 Audit with AI-visibility exports")
+async def run_audit_all(
+    ai_facts_csv: Optional[UploadFile] = File(None),
+    ai_sources_csv: Optional[UploadFile] = File(None),
+    target_url: Optional[str] = None,
+):
+    return await run_full_audit(
+        facts_bytes=await ai_facts_csv.read() if ai_facts_csv else None,
+        sources_bytes=await ai_sources_csv.read() if ai_sources_csv else None,
+        target_url=target_url,
+    )

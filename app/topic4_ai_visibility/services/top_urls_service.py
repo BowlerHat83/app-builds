@@ -34,3 +34,75 @@ def process_top_urls(sources_df: pd.DataFrame, limit: int = 10) -> Dict[str, Any
         "status": "success",
         "top_brand_sources": sources_summary
     }
+
+
+def process_top_target_urls(sources_df: pd.DataFrame, target_domain: str, limit: int = 15) -> Dict[str, Any]:
+    """
+    Ranks the TARGET domain's own individual pages by citation frequency -
+    process_top_urls() above rolls everything up to one row per source
+    DOMAIN (competitors included), which is the wrong shape when what's
+    actually wanted is "which of our own pages get cited" (e.g.
+    bowlerhat.co.uk/about-us, bowlerhat.co.uk/seo, ...).
+
+    The export's "Total Citations (Source)" column is a domain-level total
+    repeated on every row for that domain, so it can't tell two of the
+    target's own pages apart. Citation count here is instead the number of
+    distinct citation rows recorded against each individual URL - see
+    methodology_note in the return value.
+    """
+    import re
+
+    required_cols = ["Source", "URL"]
+    for col in required_cols:
+        if col not in sources_df.columns:
+            return {"status": "error", "message": f"Missing required column '{col}' in CSV"}
+
+    if not target_domain:
+        return {"status": "error", "message": "No target domain available to filter by."}
+
+    target_domain = target_domain.lower().lstrip(".")
+    df = sources_df.copy()
+    df["_source_host"] = df["Source"].astype(str).str.lower().str.replace(r"^www\.", "", regex=True)
+
+    own_rows = df[df["_source_host"].apply(lambda h: bool(h) and (h == target_domain or h in target_domain or target_domain in h))]
+    own_rows = own_rows[own_rows["URL"].notna() & (own_rows["URL"].astype(str).str.strip() != "")]
+
+    if own_rows.empty:
+        return {
+            "status": "success",
+            "target_domain": target_domain,
+            "total_citation_rows": 0,
+            "top_target_urls": [],
+        }
+
+    rows = []
+    for url, group in own_rows.groupby("URL"):
+        category = str(group["Category"].iloc[0]) if "Category" in group.columns and pd.notna(group["Category"].iloc[0]) else "Unknown"
+        entities = set()
+        if "Matched Entities" in group.columns:
+            for val in group["Matched Entities"].dropna():
+                for term in re.split(r"[|,]", str(val)):
+                    cleaned = term.strip().strip(".").strip()
+                    if cleaned:
+                        entities.add(cleaned)
+        rows.append({
+            "url": str(url),
+            "citations": len(group),
+            "category": category,
+            "matched_entities": sorted(entities)[:5],
+        })
+
+    rows.sort(key=lambda r: r["citations"], reverse=True)
+
+    return {
+        "status": "success",
+        "target_domain": target_domain,
+        "total_citation_rows": len(own_rows),
+        "top_target_urls": rows[:limit],
+        "methodology_note": (
+            "Citation count per URL is the number of distinct rows recorded for that "
+            "exact URL in the AI-visibility sources export, not the domain-level "
+            "'Total Citations (Source)' figure (which is identical for every page on a "
+            "domain and can't distinguish one page from another)."
+        ),
+    }

@@ -1,5 +1,9 @@
-﻿from fastapi import FastAPI
+from dotenv import load_dotenv
+load_dotenv()
+
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import os
 
 from app.routes.master_audit import router as master_router
@@ -15,6 +19,19 @@ app = FastAPI(
     title="SEO Audit Platform API",
     description="Master backend API orchestrating Topics 1 through 7.",
     version="1.0.0"
+)
+
+# CORS - the React frontend runs on a different origin (Vite dev server on
+# localhost, later a vercel.app domain) than this API, so the browser will
+# block requests without these headers. Wide open (*) is fine for a small
+# internal tool talking to a single client; tighten allow_origins to the
+# frontend'''s real domain(s) before this is exposed more broadly.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 os.makedirs("app/static/screenshots", exist_ok=True)

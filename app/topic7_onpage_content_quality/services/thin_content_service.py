@@ -54,11 +54,23 @@ class ThinContentService:
                     })
 
                 if results:
+                    # Bug fix: this used to slice the first 20 rows in CSV
+                    # order (results[:20]) before filtering, so on a large
+                    # site the thin-content table could end up showing only
+                    # a couple of thin pages that happened to appear early
+                    # in the CSV, while the "N thin content URLs" stat above
+                    # it (correctly computed over every row) reported a much
+                    # bigger number - a real mismatch between the two.
+                    # Filter to thin pages first, *then* cap - the frontend
+                    # table only ever displays is_thin rows anyway, and 300
+                    # is far more than any real site's thin-page count while
+                    # still bounding the response for pathological inputs.
+                    thin_pages = [r for r in results if r["is_thin"]]
                     return {
                         "total_pages_analyzed": len(results),
                         "thin_content_page_count": thin_count,
                         "thin_content_percentage": round((thin_count / len(results)) * 100, 2),
-                        "page_details": results[:20]  # Return top 20 breakdown
+                        "page_details": thin_pages[:300]
                     }
             except Exception:
                 pass
