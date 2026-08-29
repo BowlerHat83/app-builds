@@ -6,7 +6,7 @@ from fastapi import APIRouter, File, Form, UploadFile
 from app.common.audit_helpers import envelope, normalize_url, safe_check
 from app.topic2_performance.services.screaming_frog_service import (
     analyze_metadata_csv,
-    fetch_core_web_vitals,
+    fetch_core_web_vitals_both,
     fetch_tech_metrics,
 )
 
@@ -35,12 +35,17 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_by
     if tech_warn:
         warnings.append(tech_warn)
 
-    cwv, cwv_warn = await safe_check(
-        fetch_core_web_vitals(url), "Core Web Vitals (Lighthouse via PageSpeed Insights)", timeout=50
+    # Mobile and desktop run concurrently inside fetch_core_web_vitals_both -
+    # both simulated Lighthouse runs happen on Google's own infrastructure,
+    # not here, so this is one safe_check covering both rather than two.
+    cwv_both, cwv_warn = await safe_check(
+        fetch_core_web_vitals_both(url), "Core Web Vitals (Lighthouse via PageSpeed Insights)", timeout=60
     )
     if cwv_warn:
         warnings.append(cwv_warn)
-    cwv_note = None if cwv else "PAGESPEED_API_KEY not configured - Lighthouse Core Web Vitals unavailable."
+    cwv_mobile = cwv_both.get("mobile") if cwv_both else None
+    cwv_desktop = cwv_both.get("desktop") if cwv_both else None
+    cwv_note = None if (cwv_mobile or cwv_desktop) else "PAGESPEED_API_KEY not configured - Lighthouse Core Web Vitals unavailable."
 
     metadata = None
     if csv_bytes:
@@ -54,7 +59,7 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_by
     data = {
         "topic": "Topic 2: Performance & On-Page Metrics Audit",
         "target_url": url,
-        "core_web_vitals": cwv,
+        "core_web_vitals": {"mobile": cwv_mobile, "desktop": cwv_desktop},
         "core_web_vitals_note": cwv_note,
         "tech_metrics": tech_metrics,
         "metadata_analysis": metadata,

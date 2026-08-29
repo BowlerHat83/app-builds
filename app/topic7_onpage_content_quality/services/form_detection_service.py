@@ -234,7 +234,16 @@ class FormDetectionService:
                     for form in forms:
                         try:
                             action = form.get_attribute("action") or "N/A"
-                            inputs = form.locator("input, textarea, select").all()
+                            # input[type=hidden] deliberately excluded - these are
+                            # CSRF tokens, form IDs, tracking params etc a real
+                            # visitor never sees or fills in, so counting them
+                            # inflates total_inputs/mandatory/voluntary against
+                            # what the form actually feels like to use. Everything
+                            # a visitor can actually see and interact with is still
+                            # counted, hidden or not otherwise (e.g. a field
+                              # revealed after a click) is a separate, deliberate
+                            # case the form's own JS controls, not this filter.
+                            inputs = form.locator("input:not([type=hidden]), textarea, select").all()
                             input_names = [
                                 inp.get_attribute("name") or inp.get_attribute("id") or inp.get_attribute("type") or "input"
                                 for inp in inputs

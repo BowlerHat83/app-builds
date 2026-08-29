@@ -5,7 +5,7 @@ from fastapi import APIRouter, File, UploadFile
 from app.common.audit_helpers import envelope, hostname_of, read_csv_robust
 from app.topic4_ai_visibility.services.engine_visibility_service import process_engine_visibility
 from app.topic4_ai_visibility.services.top_competitors_service import process_top_competitors
-from app.topic4_ai_visibility.services.top_keywords_service import process_top_keywords
+from app.topic4_ai_visibility.services.top_keywords_service import process_long_form_prompts, process_top_keywords
 from app.topic4_ai_visibility.services.top_urls_service import process_top_target_urls, process_top_urls
 
 router = APIRouter()
@@ -34,6 +34,7 @@ async def run_full_audit(
         "engine_visibility": None,
         "top_competitors": None,
         "top_keywords": None,
+        "top_search_terms": None,
         "top_urls": None,
         "top_target_urls": None,
         "summary": None,
@@ -65,6 +66,16 @@ async def run_full_audit(
         pass
     else:
         warnings.append("Engine visibility breakdown needs both the facts CSV and the sources CSV.")
+
+    if facts_df is not None:
+        try:
+            result = process_long_form_prompts(facts_df)
+            if result.get("status") == "error":
+                warnings.append(f"top_search_terms: {result.get('message')}")
+            else:
+                data["top_search_terms"] = result
+        except Exception as e:
+            warnings.append(f"top_search_terms failed: {e}")
 
     if sources_df is not None:
         for key, fn in (
@@ -100,8 +111,13 @@ async def run_full_audit(
     if data["engine_visibility"]:
         breakdown = data["engine_visibility"].get("engine_visibility_breakdown", [])
         engines_seen = sum(1 for e in breakdown if e.get("keyword_count", 0) > 0 or e.get("source_count", 0) > 0)
-    if sources_df is not None and "URL" in sources_df.columns:
-        cited_urls = int(sources_df["URL"].dropna().nunique())
+    # cited_urls_count is scoped to the target's OWN pages (from
+    # top_target_urls), not every unique URL in the sources export - the
+    # export includes competitor and third-party sources too, and counting
+    # those here made the figure read as "how visible is our content" when
+    # it was really "how many URLs exist in this CSV at all".
+    if data["top_target_urls"] is not None:
+        cited_urls = int(data["top_target_urls"].get("total_distinct_urls", 0))
     if facts_df is not None and "Prompt" in facts_df.columns:
         cited_terms = int(facts_df["Prompt"].dropna().nunique())
 

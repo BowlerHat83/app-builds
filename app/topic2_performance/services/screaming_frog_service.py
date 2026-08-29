@@ -9,6 +9,7 @@ the field comes back None with a note explaining what's missing - it never
 gets a hardcoded stand-in number.
 """
 
+import asyncio
 import io
 import os
 import time
@@ -133,7 +134,7 @@ def fetch_tech_metrics(target_url: str) -> Dict[str, Any]:
     }
 
 
-async def fetch_core_web_vitals(target_url: str) -> Optional[Dict[str, Any]]:
+async def fetch_core_web_vitals(target_url: str, strategy: str = "MOBILE") -> Optional[Dict[str, Any]]:
     """
     Real Lighthouse Core Web Vitals via Google's PageSpeed Insights API.
 
@@ -158,7 +159,7 @@ async def fetch_core_web_vitals(target_url: str) -> Optional[Dict[str, Any]]:
     async with httpx.AsyncClient(timeout=45.0) as client:
         resp = await client.get(
             "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
-            params={"url": target_url, "key": api_key, "category": "PERFORMANCE", "strategy": "MOBILE"},
+            params={"url": target_url, "key": api_key, "category": "PERFORMANCE", "strategy": strategy},
         )
         resp.raise_for_status()
         payload = resp.json()
@@ -194,7 +195,7 @@ async def fetch_core_web_vitals(target_url: str) -> Optional[Dict[str, Any]]:
             "single simulated Lighthouse run can't produce - total_blocking_time_ms "
             "above is the standard lab-data proxy for input responsiveness."
         ),
-        "source": "Google Lighthouse (lab data, single simulated run via PageSpeed Insights API)",
+        "source": f"Google Lighthouse (lab data, single simulated {strategy.lower()} run via PageSpeed Insights API)",
         "diagnostics": {
             "requested_url": requested_url,
             "final_url": final_url,
@@ -203,3 +204,21 @@ async def fetch_core_web_vitals(target_url: str) -> Optional[Dict[str, Any]]:
             "run_warnings": run_warnings,
         },
     }
+
+
+async def fetch_core_web_vitals_both(target_url: str) -> Dict[str, Optional[Dict[str, Any]]]:
+    """
+    Runs the PageSpeed Insights Lighthouse check twice - once simulating a
+    mobile device, once desktop - since the two commonly produce very
+    different results (mobile's throttling profile is far more aggressive,
+    so a MOBILE-only figure can understate how the site actually performs
+    for a desktop visitor). Both are plain HTTP calls out to Google's own
+    infrastructure - PageSpeed Insights runs Lighthouse there, not locally -
+    so running them concurrently here doesn't launch Chromium or add
+    meaningfully to this process's own memory footprint.
+    """
+    mobile, desktop = await asyncio.gather(
+        fetch_core_web_vitals(target_url, strategy="MOBILE"),
+        fetch_core_web_vitals(target_url, strategy="DESKTOP"),
+    )
+    return {"mobile": mobile, "desktop": desktop}

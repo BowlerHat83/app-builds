@@ -16,20 +16,47 @@ class LocalVisibilityService:
         high_da_count = int((df["Domain Authority"] >= 40).sum()) if "Domain Authority" in df.columns else 0
         active_count = int((df["Status"] == "active").sum()) if "Status" in df.columns else 0
 
-        issue_cols = ["Business Name Issue", "Address Issue", "Zip/Postcode Issue", "Phone Number Issue"]
-        existing_cols = [col for col in issue_cols if col in df.columns]
-        
+        # NAP (Name/Address/Phone) consistency - a citation is "clean" if
+        # none of BrightLocal's own per-field issue flags are set for it.
+        # Matched case/whitespace-insensitively against a few real-world
+        # column-naming variants, since exports differ slightly by
+        # BrightLocal account/report type.
+        #
+        # This used to match only 4 exact hardcoded column names and, if
+        # none matched, silently fell back to reporting a blanket 100%
+        # ("no issues found") - even though it had never actually looked at
+        # a single row to reach that conclusion. That's a false "clean"
+        # result, not a real one. This now reports nap_consistency_score as
+        # None with an explanatory note when the export doesn't have
+        # anything to compute it from, so the frontend can show "not
+        # available" instead of a fabricated perfect score.
+        normalized_cols = {str(c).strip().lower(): c for c in df.columns}
+        issue_field_aliases = [
+            "business name issue", "name issue", "business_name_issue", "name_issue",
+            "address issue", "address_issue",
+            "zip/postcode issue", "zip issue", "postcode issue", "zip_issue", "postcode_issue",
+            "phone number issue", "phone issue", "phone_issue", "phone_number_issue",
+        ]
+        existing_cols = [normalized_cols[alias] for alias in issue_field_aliases if alias in normalized_cols]
+
+        nap_consistency_note = None
         if existing_cols:
             clean_rows = df[df[existing_cols].isna().all(axis=1)]
             nap_score = round((len(clean_rows) / total_citations) * 100, 2)
         else:
-            nap_score = 100.0
+            nap_score = None
+            nap_consistency_note = (
+                "This BrightLocal export doesn't include the per-field issue columns "
+                "(Business Name/Address/Zip/Phone Issue) this score is calculated from, "
+                "so NAP consistency couldn't actually be assessed."
+            )
 
         return {
             "total_citations": total_citations,
             "active_citations": active_count,
             "high_authority_citations": high_da_count,
-            "nap_consistency_score": nap_score
+            "nap_consistency_score": nap_score,
+            "nap_consistency_note": nap_consistency_note,
         }
 
     async def fetch_map_pack_position(

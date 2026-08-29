@@ -64,7 +64,26 @@ def process_top_target_urls(sources_df: pd.DataFrame, target_domain: str, limit:
     df = sources_df.copy()
     df["_source_host"] = df["Source"].astype(str).str.lower().str.replace(r"^www\.", "", regex=True)
 
-    own_rows = df[df["_source_host"].apply(lambda h: bool(h) and (h == target_domain or h in target_domain or target_domain in h))]
+    def _is_same_or_subdomain(host: str, domain: str) -> bool:
+        # Proper hostname matching rather than raw substring containment -
+        # "notexample.com" or "ample.com" both contain "example.com"/are
+        # contained by it as plain substrings without being the same site,
+        # which was silently pulling in false positives. A host counts as
+        # the target only if it's the exact domain, or a subdomain of it
+        # (e.g. "blog.example.com" for target "example.com"), or vice versa
+        # (the export's "Source" column occasionally records a broader
+        # domain than the exact target hostname).
+        if not host:
+            return False
+        if host == domain:
+            return True
+        if host.endswith("." + domain):
+            return True
+        if domain.endswith("." + host):
+            return True
+        return False
+
+    own_rows = df[df["_source_host"].apply(lambda h: _is_same_or_subdomain(h, target_domain))]
     own_rows = own_rows[own_rows["URL"].notna() & (own_rows["URL"].astype(str).str.strip() != "")]
 
     if own_rows.empty:
@@ -72,6 +91,7 @@ def process_top_target_urls(sources_df: pd.DataFrame, target_domain: str, limit:
             "status": "success",
             "target_domain": target_domain,
             "total_citation_rows": 0,
+            "total_distinct_urls": 0,
             "top_target_urls": [],
         }
 
@@ -98,6 +118,7 @@ def process_top_target_urls(sources_df: pd.DataFrame, target_domain: str, limit:
         "status": "success",
         "target_domain": target_domain,
         "total_citation_rows": len(own_rows),
+        "total_distinct_urls": len(rows),
         "top_target_urls": rows[:limit],
         "methodology_note": (
             "Citation count per URL is the number of distinct rows recorded for that "
