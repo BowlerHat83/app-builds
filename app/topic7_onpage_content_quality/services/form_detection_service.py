@@ -27,7 +27,7 @@ import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from app.common.browser_lock import CHROMIUM_SLOT
+from app.common.browser_lock import CHROMIUM_SLOT, LOW_MEMORY_CHROMIUM_ARGS
 
 # Loose call-to-action matcher used to estimate "average CTAs per page" -
 # counts <a>/<button> elements whose visible text reads like an action
@@ -180,161 +180,163 @@ class FormDetectionService:
                 # Chromium failing to launch outright, and without
                 # --disable-dev-shm-usage this is also the heaviest of the
                 # four browser launches (up to 30 pages + screenshots).
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] + LOW_MEMORY_CHROMIUM_ARGS,
             )
-            context = browser.new_context(
-                viewport={"width": 1400, "height": 900},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            )
-            page = context.new_page()
+            try:
+                context = browser.new_context(
+                    viewport={"width": 1400, "height": 900},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                )
+                page = context.new_page()
 
-            for url in candidate_urls:
-                if time.perf_counter() - start > time_budget_s:
-                    time_budget_hit = True
-                    break
+                for url in candidate_urls:
+                    if time.perf_counter() - start > time_budget_s:
+                        time_budget_hit = True
+                        break
 
-                try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                    page.wait_for_timeout(1500)
-                    _dismiss_cookie_banner(page)
-                except Exception:
-                    continue
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=12000)
+                        page.wait_for_timeout(1500)
+                        _dismiss_cookie_banner(page)
+                    except Exception:
+                        continue
 
-                pages_checked.append(url)
+                    pages_checked.append(url)
 
-                try:
-                    page_height = page.evaluate("() => document.body.scrollHeight") or None
-                except Exception:
-                    page_height = None
+                    try:
+                        page_height = page.evaluate("() => document.body.scrollHeight") or None
+                    except Exception:
+                        page_height = None
 
-                try:
-                    for el in page.locator("a, button").all():
-                        try:
-                            text = (el.inner_text() or "").strip()
-                        except Exception:
-                            text = ""
-                        is_cta = bool(text) and bool(_CTA_TEXT_RE.search(text))
-                        if not is_cta:
+                    try:
+                        for el in page.locator("a, button").all():
                             try:
-                                cls = el.get_attribute("class") or ""
+                                text = (el.inner_text() or "").strip()
                             except Exception:
-                                cls = ""
-                            is_cta = bool(_CTA_CLASS_RE.search(cls))
-                        if is_cta:
-                            total_ctas_found += 1
-                except Exception:
-                    pass
-
-                try:
-                    forms = page.locator("form").all()
-                except Exception:
-                    forms = []
-
-                for form in forms:
-                    try:
-                        action = form.get_attribute("action") or "N/A"
-                        inputs = form.locator("input, textarea, select").all()
-                        input_names = [
-                            inp.get_attribute("name") or inp.get_attribute("id") or inp.get_attribute("type") or "input"
-                            for inp in inputs
-                        ]
-                        sig = hashlib.md5("".join(input_names).encode("utf-8")).hexdigest()[:8]
+                                text = ""
+                            is_cta = bool(text) and bool(_CTA_TEXT_RE.search(text))
+                            if not is_cta:
+                                try:
+                                    cls = el.get_attribute("class") or ""
+                                except Exception:
+                                    cls = ""
+                                is_cta = bool(_CTA_CLASS_RE.search(cls))
+                            if is_cta:
+                                total_ctas_found += 1
                     except Exception:
-                        continue
-
-                    if page_height:
-                        try:
-                            bbox = form.bounding_box()
-                        except Exception:
-                            bbox = None
-                        if bbox:
-                            depth_pct = max(0.0, min(100.0, (bbox["y"] / page_height) * 100))
-                            placement_samples.setdefault(sig, []).append(depth_pct)
-
-                    if sig in unique_forms:
-                        unique_forms[sig]["occurrence_count"] += 1
-                        continue
-
-                    mandatory = 0
-                    voluntary = 0
-                    for inp in inputs:
-                        try:
-                            is_req = (
-                                inp.get_attribute("required") is not None
-                                or inp.get_attribute("aria-required") == "true"
-                            )
-                        except Exception:
-                            is_req = False
-                        if is_req:
-                            mandatory += 1
-                        else:
-                            voluntary += 1
-
-                    unique_forms[sig] = {
-                        "form_id": f"form_{sig}",
-                        "action": action,
-                        "first_seen_url": url,
-                        "occurrence_count": 1,
-                        "total_inputs": len(input_names),
-                        "sample_inputs": input_names[:5],
-                    }
+                        pass
 
                     try:
-                        is_visible = form.is_visible()
+                        forms = page.locator("form").all()
                     except Exception:
-                        is_visible = False
+                        forms = []
 
-                    if not is_visible:
+                    for form in forms:
+                        try:
+                            action = form.get_attribute("action") or "N/A"
+                            inputs = form.locator("input, textarea, select").all()
+                            input_names = [
+                                inp.get_attribute("name") or inp.get_attribute("id") or inp.get_attribute("type") or "input"
+                                for inp in inputs
+                            ]
+                            sig = hashlib.md5("".join(input_names).encode("utf-8")).hexdigest()[:8]
+                        except Exception:
+                            continue
+
+                        if page_height:
+                            try:
+                                bbox = form.bounding_box()
+                            except Exception:
+                                bbox = None
+                            if bbox:
+                                depth_pct = max(0.0, min(100.0, (bbox["y"] / page_height) * 100))
+                                placement_samples.setdefault(sig, []).append(depth_pct)
+
+                        if sig in unique_forms:
+                            unique_forms[sig]["occurrence_count"] += 1
+                            continue
+
+                        mandatory = 0
+                        voluntary = 0
+                        for inp in inputs:
+                            try:
+                                is_req = (
+                                    inp.get_attribute("required") is not None
+                                    or inp.get_attribute("aria-required") == "true"
+                                )
+                            except Exception:
+                                is_req = False
+                            if is_req:
+                                mandatory += 1
+                            else:
+                                voluntary += 1
+
+                        unique_forms[sig] = {
+                            "form_id": f"form_{sig}",
+                            "action": action,
+                            "first_seen_url": url,
+                            "occurrence_count": 1,
+                            "total_inputs": len(input_names),
+                            "sample_inputs": input_names[:5],
+                        }
+
+                        try:
+                            is_visible = form.is_visible()
+                        except Exception:
+                            is_visible = False
+
+                        if not is_visible:
+                            screenshots.append({
+                                "form_id": f"form_{sig}",
+                                "status": "hidden_on_load",
+                                "note": "Form exists in the page HTML but wasn't visible on load (e.g. a popup/modal form) - no screenshot captured for it.",
+                                "screenshot_filename": None,
+                                "relative_path": None,
+                                "found_on_url": url,
+                                "mandatory_inputs": mandatory,
+                                "voluntary_inputs": voluntary,
+                                "total_inputs": len(input_names),
+                            })
+                            continue
+
+                        if screenshot_count >= max_screenshots:
+                            screenshots.append({
+                                "form_id": f"form_{sig}",
+                                "status": "skipped_screenshot_cap",
+                                "note": f"Screenshot cap ({max_screenshots}) reached - this form was detected but not screenshotted.",
+                                "screenshot_filename": None,
+                                "relative_path": None,
+                                "found_on_url": url,
+                                "mandatory_inputs": mandatory,
+                                "voluntary_inputs": voluntary,
+                                "total_inputs": len(input_names),
+                            })
+                            continue
+
+                        filename = f"form_{sig}.png"
+                        filepath = os.path.join(output_dir, filename)
+                        try:
+                            form.scroll_into_view_if_needed(timeout=3000)
+                            form.screenshot(path=filepath, timeout=5000)
+                            status = "captured"
+                            screenshot_count += 1
+                        except Exception as e:
+                            status = f"screenshot_failed: {e}"
+                            filename = None
+
                         screenshots.append({
                             "form_id": f"form_{sig}",
-                            "status": "hidden_on_load",
-                            "note": "Form exists in the page HTML but wasn't visible on load (e.g. a popup/modal form) - no screenshot captured for it.",
-                            "screenshot_filename": None,
-                            "relative_path": None,
+                            "status": status,
+                            "screenshot_filename": filename,
+                            "relative_path": f"/static/screenshots/forms/{filename}" if filename else None,
                             "found_on_url": url,
                             "mandatory_inputs": mandatory,
                             "voluntary_inputs": voluntary,
                             "total_inputs": len(input_names),
                         })
-                        continue
 
-                    if screenshot_count >= max_screenshots:
-                        screenshots.append({
-                            "form_id": f"form_{sig}",
-                            "status": "skipped_screenshot_cap",
-                            "note": f"Screenshot cap ({max_screenshots}) reached - this form was detected but not screenshotted.",
-                            "screenshot_filename": None,
-                            "relative_path": None,
-                            "found_on_url": url,
-                            "mandatory_inputs": mandatory,
-                            "voluntary_inputs": voluntary,
-                            "total_inputs": len(input_names),
-                        })
-                        continue
-
-                    filename = f"form_{sig}.png"
-                    filepath = os.path.join(output_dir, filename)
-                    try:
-                        form.scroll_into_view_if_needed(timeout=3000)
-                        form.screenshot(path=filepath, timeout=5000)
-                        status = "captured"
-                        screenshot_count += 1
-                    except Exception as e:
-                        status = f"screenshot_failed: {e}"
-                        filename = None
-
-                    screenshots.append({
-                        "form_id": f"form_{sig}",
-                        "status": status,
-                        "screenshot_filename": filename,
-                        "relative_path": f"/static/screenshots/forms/{filename}" if filename else None,
-                        "found_on_url": url,
-                        "mandatory_inputs": mandatory,
-                        "voluntary_inputs": voluntary,
-                        "total_inputs": len(input_names),
-                    })
-
-            browser.close()
+            finally:
+                browser.close()
 
         form_placement_guidance = []
         for sig, info in unique_forms.items():

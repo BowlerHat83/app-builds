@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
-from app.common.browser_lock import CHROMIUM_SLOT
+from app.common.browser_lock import CHROMIUM_SLOT, LOW_MEMORY_CHROMIUM_ARGS
 
 # Where to drop axe.min.js to switch this over to the real engine - see the
 # module docstring above. No code changes needed once it's here; this is
@@ -366,7 +366,7 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] + LOW_MEMORY_CHROMIUM_ARGS,
         )
         context = browser.new_context(
             viewport={"width": 1366, "height": 900},

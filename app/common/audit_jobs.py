@@ -39,6 +39,8 @@ from app.topic5_paid_visibility.aggregate import run_full_audit as run_topic5_au
 from app.topic6_local_visibility.aggregate import run_full_audit as run_topic6_audit
 from app.topic7_onpage_content_quality.aggregate import run_full_audit as run_topic7_audit
 from app.routes.master_audit import _safe, _extract_unbranded_keywords
+from app.common.browser_lock import TOPIC_SLOT
+from app.common.diagnostics import log_memory
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 
@@ -76,6 +78,21 @@ def _pending_envelope(topic_label: str) -> dict:
     return {"status": "pending", "topic": topic_label, "data": {}, "warnings": ["Still running..."]}
 
 
+async def _run_topic(coro, topic_label: str) -> dict:
+    """
+    Runs one topic's audit through TOPIC_SLOT (see browser_lock.py) so at
+    most a handful of topics ever do their own CSV-parsing/API-call work at
+    the same instant instead of all 6 non-Topic-6 topics piling onto the
+    heap together - then logs the process's peak memory right after, so a
+    run of these lines in Render's logs shows how close each topic pushed
+    toward the 512MB ceiling, not just a bare crash with no context.
+    """
+    async with TOPIC_SLOT:
+        result = await _safe(coro, topic_label)
+    log_memory(f"finished {topic_label}")
+    return result
+
+
 async def _run_topic6(t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes) -> dict:
     """
     Topic 6's map-pack rank check wants top unbranded keywords pulled from
@@ -85,21 +102,30 @@ async def _run_topic6(t3_task, t4_task, t5_task, business_name, target_location,
     returns instantly, so this only actually waits if Topic 6 happens to
     finish computing its own business-info/screenshot work before all of
     3/4/5 are done.
+
+    That wait deliberately happens outside TOPIC_SLOT - only the actual
+    run_topic6_audit() call below claims a slot. Holding a slot while
+    blocked waiting on other tasks (which need their own slot to make
+    progress) would waste it for no reason and could stall the queue for
+    everyone else.
     """
     t3 = await t3_task
     t4 = await t4_task
     t5 = await t5_task
     extra_keywords = _extract_unbranded_keywords(t3, t4, t5, business_name)
-    return await _safe(
-        run_topic6_audit(
-            business_name=business_name,
-            target_location=target_location,
-            target_url=target_url,
-            brightlocal_bytes=brightlocal_bytes,
-            extra_keywords=extra_keywords,
-        ),
-        _TOPIC_LABELS["topic6_local_visibility"],
-    )
+    async with TOPIC_SLOT:
+        result = await _safe(
+            run_topic6_audit(
+                business_name=business_name,
+                target_location=target_location,
+                target_url=target_url,
+                brightlocal_bytes=brightlocal_bytes,
+                extra_keywords=extra_keywords,
+            ),
+            _TOPIC_LABELS["topic6_local_visibility"],
+        )
+    log_memory(f"finished {_TOPIC_LABELS['topic6_local_visibility']}")
+    return result
 
 
 def create_audit_job(
@@ -124,13 +150,14 @@ def create_audit_job(
     of how long the checks it just started end up taking.
     """
     _cleanup_stale()
+    log_memory(f"job start ({target_url})")
 
-    t1_task = asyncio.create_task(_safe(run_topic1_audit(target_url=target_url), _TOPIC_LABELS["topic1_technical"]))
+    t1_task = asyncio.create_task(_run_topic(run_topic1_audit(target_url=target_url), _TOPIC_LABELS["topic1_technical"]))
     t2_task = asyncio.create_task(
-        _safe(run_topic2_audit(target_url=target_url, csv_bytes=sf_bytes), _TOPIC_LABELS["topic2_performance"])
+        _run_topic(run_topic2_audit(target_url=target_url, csv_bytes=sf_bytes), _TOPIC_LABELS["topic2_performance"])
     )
     t3_task = asyncio.create_task(
-        _safe(
+        _run_topic(
             run_topic3_audit(
                 backlinks_bytes=ahrefs_backlinks_bytes,
                 keywords_bytes=ahrefs_keywords_bytes,
@@ -140,19 +167,19 @@ def create_audit_job(
         )
     )
     t4_task = asyncio.create_task(
-        _safe(
+        _run_topic(
             run_topic4_audit(facts_bytes=ai_facts_bytes, sources_bytes=ai_sources_bytes, target_url=target_url),
             _TOPIC_LABELS["topic4_ai_visibility"],
         )
     )
     t5_task = asyncio.create_task(
-        _safe(
+        _run_topic(
             run_topic5_audit(ppc_keywords_bytes=ppc_keywords_bytes, ppc_competitors_bytes=ppc_competitors_bytes),
             _TOPIC_LABELS["topic5_paid_visibility"],
         )
     )
     t7_task = asyncio.create_task(
-        _safe(run_topic7_audit(target_url=target_url, csv_bytes=sf_bytes), _TOPIC_LABELS["topic7_content_quality"])
+        _run_topic(run_topic7_audit(target_url=target_url, csv_bytes=sf_bytes), _TOPIC_LABELS["topic7_content_quality"])
     )
     t6_task = asyncio.create_task(
         _run_topic6(t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes)
