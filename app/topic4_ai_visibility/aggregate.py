@@ -131,11 +131,22 @@ async def run_full_audit(
     if facts_df is not None and "Prompt" in facts_df.columns:
         cited_terms = int(facts_df["Prompt"].dropna().nunique())
 
-    data["summary"] = {
-        "engine_visibility_ratio": f"{engines_seen}/{len(ENGINES)}",
-        "cited_urls_count": cited_urls,
-        "cited_search_terms_count": cited_terms,
-    }
+    # Only build a summary when at least one export was actually supplied -
+    # with neither facts_bytes nor sources_bytes, engines_seen/cited_urls/
+    # cited_terms are all structurally 0 (nothing was ever computed), and a
+    # summary built from that would read as "0/4 engines cite you" - a real,
+    # bad-looking result - rather than "we don't know, nothing was
+    # submitted". Leaving data["summary"] as the None it's initialized to
+    # keeps that distinction, matching the same not-fabricated-when-absent
+    # rule used elsewhere (e.g. Topic 6 NAP, Topic 7 thin content, Topic 3
+    # traffic fallbacks) and is what lets the frontend composite score treat
+    # a fully-absent Topic 4 as N/A instead of a 0.
+    if facts_df is not None or sources_df is not None:
+        data["summary"] = {
+            "engine_visibility_ratio": f"{engines_seen}/{len(ENGINES)}",
+            "cited_urls_count": cited_urls,
+            "cited_search_terms_count": cited_terms,
+        }
 
     return envelope("Topic 4: AI Visibility Audit", data, warnings)
 
