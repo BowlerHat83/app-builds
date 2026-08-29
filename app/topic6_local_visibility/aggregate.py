@@ -106,10 +106,21 @@ async def run_full_audit(
     if reviews_warn:
         warnings.append(reviews_warn)
 
+    # Same single-slot Chromium semaphore as Topic 1's WCAG/GDPR checks and
+    # Topic 7's form crawl (see app/common/browser_lock.py) - only one
+    # headless browser runs at a time across the whole audit. Topic 1's own
+    # checks were already bumped to 90s each and Topic 7's crawl to 100s for
+    # exactly this reason (see the comment in topic1's aggregate.py), but
+    # this one was left at 45s - meaning it could time out purely from
+    # queueing behind those two, before the actual (much shorter) screenshot
+    # capture ever got a turn at the browser. 130s gives room to wait out a
+    # worst-case queue behind Topic 7's crawl and still complete; a normal
+    # capture (a few seconds once it has the browser) finishes just as fast
+    # as before.
     screenshot_awaitable = (prewarm_job or {}).get("screenshot_task") or screenshot_svc.capture_screenshot(
         business_name, target_location
     )
-    screenshot, screenshot_warn = await safe_check(screenshot_awaitable, "GBP screenshot capture", timeout=45)
+    screenshot, screenshot_warn = await safe_check(screenshot_awaitable, "GBP screenshot capture", timeout=130)
     if screenshot_warn:
         warnings.append(screenshot_warn)
 

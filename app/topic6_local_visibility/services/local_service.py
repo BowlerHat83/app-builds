@@ -39,17 +39,47 @@ class LocalVisibilityService:
         ]
         existing_cols = [normalized_cols[alias] for alias in issue_field_aliases if alias in normalized_cols]
 
+        # Broader, un-opinionated scan (substring match on "issue") purely
+        # for transparency - this is what actually lets a score that looks
+        # wrong get diagnosed without needing to see the raw CSV. If a real
+        # export uses column names this alias list doesn't anticipate (e.g.
+        # different wording, or one combined "Issues" column instead of
+        # four separate ones), those columns will show up here even when
+        # they didn't match above, so it's visible exactly what was and
+        # wasn't looked at.
+        issue_like_cols = [str(c) for c in df.columns if "issue" in str(c).strip().lower()]
+
         nap_consistency_note = None
         if existing_cols:
             clean_rows = df[df[existing_cols].isna().all(axis=1)]
             nap_score = round((len(clean_rows) / total_citations) * 100, 2)
+            unmatched_issue_like = [c for c in issue_like_cols if c not in existing_cols]
+            if unmatched_issue_like:
+                # Score was computed, but there's at least one other
+                # "issue"-shaped column that wasn't part of the calculation
+                # - flag it rather than silently ignoring it, since it could
+                # be the real signal if the matched columns turn out to be
+                # unreliable (e.g. always blank in this report type).
+                nap_consistency_note = (
+                    f"Score is based on {', '.join(existing_cols)}. This export also has "
+                    f"{', '.join(unmatched_issue_like)}, which weren't recognized and so weren't "
+                    "included - if the score above looks wrong, this is the most likely reason."
+                )
         else:
             nap_score = None
-            nap_consistency_note = (
-                "This BrightLocal export doesn't include the per-field issue columns "
-                "(Business Name/Address/Zip/Phone Issue) this score is calculated from, "
-                "so NAP consistency couldn't actually be assessed."
-            )
+            if issue_like_cols:
+                nap_consistency_note = (
+                    "This BrightLocal export has issue-related columns "
+                    f"({', '.join(issue_like_cols)}) but not the exact per-field names "
+                    "(Business Name/Address/Zip/Phone Issue) this score expects, so NAP "
+                    "consistency couldn't be assessed from them."
+                )
+            else:
+                nap_consistency_note = (
+                    "This BrightLocal export doesn't include the per-field issue columns "
+                    "(Business Name/Address/Zip/Phone Issue) this score is calculated from, "
+                    "so NAP consistency couldn't actually be assessed."
+                )
 
         return {
             "total_citations": total_citations,
@@ -57,6 +87,7 @@ class LocalVisibilityService:
             "high_authority_citations": high_da_count,
             "nap_consistency_score": nap_score,
             "nap_consistency_note": nap_consistency_note,
+            "nap_consistency_columns_checked": existing_cols,
         }
 
     async def fetch_map_pack_position(
