@@ -37,9 +37,22 @@ def log_memory(label: str) -> None:
     confirm (or rule out) memory pressure as the cause of a crash-restart,
     rather than guessing from symptoms alone.
 
+    RUSAGE_SELF only covers this Python/uvicorn process - it does NOT
+    include Playwright's Chromium, which always runs as separate child
+    processes (browser + renderer, at minimum). A crash with "peak RSS"
+    logs showing e.g. 146MB right before an OOM kill isn't a contradiction
+    - it means the Python side was nowhere near the ceiling and whatever
+    tipped the container's total memory over 512MB was in a child process
+    instead, which is exactly why RUSAGE_CHILDREN is also logged below:
+    it's the same high-water-mark reasoning, just for every child process
+    this one has ever waited on (Chromium included), so the two numbers
+    together show whether a crash was this process or a spawned Chromium
+    instance.
+
     On Linux, ru_maxrss is reported in kilobytes.
     """
     if not _HAS_RESOURCE:
         return
-    peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-    print(f"[mem] {label}: peak RSS so far = {peak_mb:.0f}MB", flush=True)
+    self_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    children_mb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1024
+    print(f"[mem] {label}: peak RSS so far = {self_mb:.0f}MB self + {children_mb:.0f}MB children (Chromium etc.)", flush=True)

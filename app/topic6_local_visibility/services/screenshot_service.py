@@ -4,10 +4,12 @@ import asyncio
 from typing import Dict, Any
 
 from app.common.browser_lock import CHROMIUM_SLOT, LOW_MEMORY_CHROMIUM_ARGS
+from app.common.diagnostics import log_memory
 
 class GBPScreenshotService:
     def _capture_sync(self, query: str, filepath: str):
         from playwright.sync_api import sync_playwright
+        log_memory("Topic 6 GBP screenshot: before Chromium launch")
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
@@ -80,6 +82,7 @@ class GBPScreenshotService:
 
             finally:
                 browser.close()
+                log_memory("Topic 6 GBP screenshot: after Chromium closed")
 
     async def capture_screenshot(self, business_name: str, location: str) -> Dict[str, Any]:
         output_dir = os.path.abspath("app/static/screenshots")

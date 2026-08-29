@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from app.common.browser_lock import CHROMIUM_SLOT, LOW_MEMORY_CHROMIUM_ARGS
+from app.common.diagnostics import log_memory
 
 
 class MandatoryPolicies(BaseModel):
@@ -50,6 +51,7 @@ def _sync_run_gdpr_audit(url: str) -> GDPRCheckResult:
     if not url.startswith("http"):
         url = "https://" + url
 
+    log_memory("Topic 1 GDPR: before Chromium launch")
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -149,6 +151,7 @@ def _sync_run_gdpr_audit(url: str) -> GDPRCheckResult:
 
         finally:
             browser.close()
+            log_memory("Topic 1 GDPR: after Chromium closed")
 
         risk_preconsent = pre_consent_count > 3
 

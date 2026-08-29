@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from app.common.browser_lock import CHROMIUM_SLOT, LOW_MEMORY_CHROMIUM_ARGS
+from app.common.diagnostics import log_memory
 
 # Loose call-to-action matcher used to estimate "average CTAs per page" -
 # counts <a>/<button> elements whose visible text reads like an action
@@ -161,6 +162,7 @@ class FormDetectionService:
     ) -> Dict[str, Any]:
         from playwright.sync_api import sync_playwright
 
+        log_memory("Topic 7 form crawl: before Chromium launch")
         os.makedirs(output_dir, exist_ok=True)
         unique_forms: Dict[str, Dict[str, Any]] = {}
         placement_samples: Dict[str, List[float]] = {}
@@ -346,6 +348,7 @@ class FormDetectionService:
 
             finally:
                 browser.close()
+                log_memory("Topic 7 form crawl: after Chromium closed")
 
         form_placement_guidance = []
         for sig, info in unique_forms.items():

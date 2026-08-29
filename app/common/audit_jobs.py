@@ -27,6 +27,7 @@ POST /audit-prewarm) for anything using this new flow, but that module and
 """
 
 import asyncio
+import gc
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -89,6 +90,15 @@ async def _run_topic(coro, topic_label: str) -> dict:
     """
     async with TOPIC_SLOT:
         result = await _safe(coro, topic_label)
+        # A nudge, not a fix: CPython's allocator doesn't reliably hand
+        # freed heap back to the OS on its own, and the DataFrames/API
+        # responses this topic just finished with are exactly the kind of
+        # reference-cycle-heavy objects (pandas, requests) that benefit
+        # from an explicit collect rather than waiting on the next
+        # generational GC to get around to them - cheap to call, and worth
+        # it while still holding this topic's TOPIC_SLOT permit, before the
+        # next queued topic (possibly Chromium-heavy) starts its own work.
+        gc.collect()
     log_memory(f"finished {topic_label}")
     return result
 
@@ -124,6 +134,7 @@ async def _run_topic6(t3_task, t4_task, t5_task, business_name, target_location,
             ),
             _TOPIC_LABELS["topic6_local_visibility"],
         )
+        gc.collect()
     log_memory(f"finished {_TOPIC_LABELS['topic6_local_visibility']}")
     return result
 

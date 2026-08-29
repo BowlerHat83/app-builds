@@ -46,6 +46,17 @@ LOW_MEMORY_CHROMIUM_ARGS = [
     "--mute-audio",
     "--no-first-run",
     "--safebrowsing-disable-auto-update",
+    # Site Isolation spins up a separate OS renderer process per origin a
+    # page touches (iframes, cross-origin subresources) as a security
+    # boundary against one site reading another's memory - a real concern
+    # for a general-purpose browser with untrusted tabs open side by side,
+    # not for a single-purpose headless scrape/screenshot with nothing else
+    # sharing the process. Google Maps in particular (Topic 6's screenshot
+    # target) pulls in enough distinct origins that this can multiply its
+    # renderer-process count, and therefore memory, well beyond what a
+    # single-page capture needs. Disabling it merges everything back into
+    # one renderer process per check.
+    "--disable-features=IsolateOrigins,site-per-process",
 ]
 
 # A second, coarser cap on top of CHROMIUM_SLOT above. CHROMIUM_SLOT only
@@ -60,7 +71,18 @@ LOW_MEMORY_CHROMIUM_ARGS = [
 # parallelism for headroom is a clean win on this plan, not a real loss.
 #
 # Tunable via TOPIC_CONCURRENCY so it can be raised without a code change
-# if this ever moves to a plan with more than 512MB - defaults to 2 (some
-# overlap for I/O-bound waiting like API calls, without letting every
-# CSV-parsing topic pile up in memory at the same instant).
-TOPIC_SLOT = asyncio.Semaphore(max(1, int(os.environ.get("TOPIC_CONCURRENCY", "2"))))
+# if this ever moves to a plan with more than 512MB - defaults to 1. This
+# was 2 (some overlap for I/O-bound waiting like API calls) until a live
+# run on Render crashed the process outright the first time a Chromium-
+# heavy topic (1/6/7) came up: [mem] logging showed the Python side at a
+# safe ~146MB right before the crash-restart, meaning whatever pushed the
+# container over its 512MB ceiling wasn't tracked by that logging at all -
+# almost certainly a Chromium child process (see diagnostics.py, which now
+# also logs RUSAGE_CHILDREN to confirm this on the next run). Serializing
+# topics fully removes any chance of a second topic's CSV/API work adding
+# to the heap at the exact moment a ~300-500MB Chromium instance is also
+# live, trading some wall-clock time for not crashing outright - a clean
+# win on a plan this tight on memory, and the audit already fills in
+# results topic by topic rather than waiting on all 7 before showing
+# anything.
+TOPIC_SLOT = asyncio.Semaphore(max(1, int(os.environ.get("TOPIC_CONCURRENCY", "1"))))
