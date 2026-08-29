@@ -1,4 +1,5 @@
 import httpx
+from collections import Counter
 from typing import Dict, Any, List, Optional
 
 class GBPReviewService:
@@ -128,6 +129,19 @@ class GBPReviewService:
                         "snippet": rev.get("snippet", "")
                     })
 
+                # A 1-5 star distribution across every review this response
+                # actually returned - free from the same call, only the top
+                # 5 were being surfaced before. SerpApi's google_maps_reviews
+                # returns one page of reviews (not the business's entire
+                # review history), so this is a distribution over the
+                # reviews_sampled count below, not necessarily every review
+                # the listing has ever received - see total_reviews for the
+                # real all-time count from place_info.
+                rating_counts = Counter(
+                    int(round(rev["rating"])) for rev in reviews_data if isinstance(rev.get("rating"), (int, float))
+                )
+                rating_distribution = {str(star): rating_counts.get(star, 0) for star in range(1, 6)}
+
                 return {
                     "business_name": matched_title or business_name,
                     "location": location,
@@ -138,7 +152,9 @@ class GBPReviewService:
                         "average_rating": place_info.get("rating", 0.0),
                         "rating_stars": "★" * int(round(place_info.get("rating", 0.0)))
                     },
-                    "top_reviews": top_reviews
+                    "top_reviews": top_reviews,
+                    "rating_distribution": rating_distribution,
+                    "reviews_sampled": len(reviews_data),
                 }
         except Exception as e:
             return {

@@ -1,11 +1,13 @@
 import asyncio
+from datetime import datetime, timezone
 from typing import Optional
 
+from dateutil import parser as date_parser
 from fastapi import APIRouter
 
 from app.common.audit_helpers import envelope, normalize_url, safe_check
 from app.topic1_website_auditor.services.ssl_service import check_ssl_certificate
-from app.topic1_website_auditor.services.sitemap_service import discover_sitemap_url, fetch_sitemap_urls
+from app.topic1_website_auditor.services.sitemap_service import discover_sitemap_url, fetch_sitemap_urls_with_lastmod
 from app.topic1_website_auditor.services.wcag_service import fetch_and_audit_wcag
 from app.topic1_website_auditor.services.gdpr_service import run_gdpr_audit
 from app.topic1_website_auditor.services.html_checker_service import fetch_and_validate_html
@@ -48,9 +50,49 @@ async def run_full_audit(
     ssl_result, ssl_warn = await safe_check(asyncio.to_thread(check_ssl_certificate, url), "SSL certificate check", timeout=15)
 
     sitemap_url, sitemap_warn = await safe_check(discover_sitemap_url(url), "Sitemap discovery", timeout=15)
-    sitemap_urls, sitemap_urls_warn = (None, None)
+    sitemap_entries, sitemap_urls_warn = (None, None)
     if sitemap_url:
-        sitemap_urls, sitemap_urls_warn = await safe_check(fetch_sitemap_urls(sitemap_url), "Sitemap fetch", timeout=15)
+        sitemap_entries, sitemap_urls_warn = await safe_check(
+            fetch_sitemap_urls_with_lastmod(sitemap_url), "Sitemap fetch", timeout=15
+        )
+    sitemap_urls = [e["url"] for e in sitemap_entries] if sitemap_entries else None
+
+    # <lastmod> is real content-freshness data the sitemap already provides -
+    # this used to only be read for URL count, discarding lastmod entirely.
+    # Parsed leniently (dateutil handles bare dates and full ISO8601 with a
+    # timezone alike) since sitemap generators vary in how precise they are.
+    sitemap_freshness = None
+    if sitemap_entries:
+        with_lastmod = 0
+        parsed_dates = []
+        for entry in sitemap_entries:
+            if entry.get("lastmod"):
+                with_lastmod += 1
+                try:
+                    dt = date_parser.parse(entry["lastmod"])
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    parsed_dates.append(dt)
+                except (ValueError, OverflowError):
+                    continue
+        without_lastmod = len(sitemap_entries) - with_lastmod
+        if parsed_dates:
+            now = datetime.now(timezone.utc)
+            sitemap_freshness = {
+                "pages_with_lastmod": with_lastmod,
+                "pages_without_lastmod": without_lastmod,
+                "most_recent_lastmod": max(parsed_dates).date().isoformat(),
+                "oldest_lastmod": min(parsed_dates).date().isoformat(),
+                "pages_stale_over_1y": sum(1 for d in parsed_dates if (now - d).days > 365),
+            }
+        else:
+            sitemap_freshness = {
+                "pages_with_lastmod": 0,
+                "pages_without_lastmod": len(sitemap_entries),
+                "most_recent_lastmod": None,
+                "oldest_lastmod": None,
+                "pages_stale_over_1y": None,
+            }
 
     # html_checker is declared async but calls curl_cffi synchronously inside -
     # route it through a thread so it can't block the shared event loop.
@@ -101,11 +143,16 @@ async def run_full_audit(
                 "found": bool(sitemap_urls),
                 "sitemap_url": sitemap_url,
                 "url_count": len(sitemap_urls) if sitemap_urls else 0,
+                "freshness": sitemap_freshness,
             },
             "ssl_certificate": ssl_result.model_dump() if ssl_result else None,
             "html_syntax": {
                 "is_valid": html_result.is_valid if html_result else None,
                 "total_errors": html_result.total_errors if html_result else None,
+                # The actual validation messages, not just the count - this
+                # used to be computed and then discarded here.
+                "errors": [e.model_dump() for e in html_result.errors[:50]] if html_result else [],
+                "errors_truncated": bool(html_result and len(html_result.errors) > 50),
             },
         },
         "wcag_accessibility": {

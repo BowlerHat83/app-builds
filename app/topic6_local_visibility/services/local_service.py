@@ -8,13 +8,47 @@ from typing import Dict, Any, List, Optional
 class LocalVisibilityService:
     async def process_brightlocal_csv(self, csv_bytes: bytes) -> Dict[str, Any]:
         df = pd.read_csv(io.BytesIO(csv_bytes))
-        
-        total_citations = len(df)
-        if total_citations == 0:
+
+        if len(df) == 0:
             return {"error": "CSV file is empty"}
 
-        high_da_count = int((df["Domain Authority"] >= 40).sum()) if "Domain Authority" in df.columns else 0
-        active_count = int((df["Status"] == "active").sum()) if "Status" in df.columns else 0
+        # BrightLocal's "Status" column mixes three very different things
+        # into one export: "active" (a real, confirmed citation the
+        # business actually has), "Duplicate" (also a real citation - and
+        # itself a genuine local-SEO problem, since duplicate listings for
+        # the same business confuse search engines), and "Potential" (a
+        # directory BrightLocal is merely suggesting as an opportunity -
+        # the business isn't listed there at all). Treating every row as a
+        # "citation" massively overstated the citation count on a real
+        # export tested against this code (918 rows, only 213 of which are
+        # actual citations - the other 705 were "Potential"), and, more
+        # importantly, silently inflated NAP consistency: an unclaimed
+        # "Potential" row trivially has no NAP issues, because it has no
+        # NAP data at all to have issues with.
+        status_norm = df["Status"].astype(str).str.strip().str.lower() if "Status" in df.columns else None
+        if status_norm is not None:
+            is_potential = status_norm == "potential"
+            citation_rows = df[~is_potential]
+            potential_rows = df[is_potential]
+            active_count = int((status_norm == "active").sum())
+            duplicate_count = int((status_norm == "duplicate").sum())
+        else:
+            citation_rows = df
+            potential_rows = df.iloc[0:0]
+            active_count = 0
+            duplicate_count = 0
+
+        total_citations = int(len(citation_rows))
+        potential_opportunities = int(len(potential_rows))
+
+        if total_citations == 0:
+            return {
+                "error": "This export has no active or duplicate citations - only unclaimed 'Potential' listings "
+                "(directories BrightLocal suggests but the business isn't actually listed on yet)."
+            }
+
+        high_da_count = int((citation_rows["Domain Authority"] >= 40).sum()) if "Domain Authority" in citation_rows.columns else 0
+        high_da_opportunities = int((potential_rows["Domain Authority"] >= 40).sum()) if "Domain Authority" in potential_rows.columns else 0
 
         # NAP (Name/Address/Phone) consistency - a citation is "clean" if
         # none of BrightLocal's own per-field issue flags are set for it.
@@ -49,24 +83,51 @@ class LocalVisibilityService:
         # wasn't looked at.
         issue_like_cols = [str(c) for c in df.columns if "issue" in str(c).strip().lower()]
 
+        # Even among real citation rows, BrightLocal only has NAP data to
+        # actually check on the ones it's deep-crawled - most rows in a
+        # typical export (Potential opportunities, and some active/
+        # Duplicate rows BrightLocal hasn't deep-checked yet) have no
+        # Business Name/Address/Zip/Phone captured at all. Scoring those as
+        # "clean" alongside genuinely-verified rows is the same fabrication
+        # problem as the old 100% fallback, just smaller in magnitude - so
+        # the score is scoped to only the rows BrightLocal actually
+        # captured NAP data for.
+        core_field_aliases = ["business name", "address", "zip/postcode", "phone number"]
+        existing_core_cols = [normalized_cols[alias] for alias in core_field_aliases if alias in normalized_cols]
+        checked_rows = citation_rows[citation_rows[existing_core_cols].notna().any(axis=1)] if existing_core_cols else citation_rows
+        nap_sample_size = int(len(checked_rows))
+
         nap_consistency_note = None
+        nap_score = None
         if existing_cols:
-            clean_rows = df[df[existing_cols].isna().all(axis=1)]
-            nap_score = round((len(clean_rows) / total_citations) * 100, 2)
-            unmatched_issue_like = [c for c in issue_like_cols if c not in existing_cols]
-            if unmatched_issue_like:
-                # Score was computed, but there's at least one other
-                # "issue"-shaped column that wasn't part of the calculation
-                # - flag it rather than silently ignoring it, since it could
-                # be the real signal if the matched columns turn out to be
-                # unreliable (e.g. always blank in this report type).
+            if nap_sample_size > 0:
+                clean_rows = checked_rows[checked_rows[existing_cols].isna().all(axis=1)]
+                nap_score = round((len(clean_rows) / nap_sample_size) * 100, 2)
+                note_parts = [
+                    f"Based on the {nap_sample_size} of {total_citations} citations BrightLocal has actually "
+                    f"captured Business Name/Address/Zip/Phone data for (checked against {', '.join(existing_cols)}) "
+                    "- the rest are either unclaimed opportunities or citations not yet deep-checked, so they're "
+                    "excluded rather than counted as automatically clean."
+                ]
+                unmatched_issue_like = [c for c in issue_like_cols if c not in existing_cols]
+                if unmatched_issue_like:
+                    # Score was computed, but there's at least one other
+                    # "issue"-shaped column that wasn't part of the
+                    # calculation - flag it rather than silently ignoring
+                    # it, since it could be the real signal if the matched
+                    # columns turn out to be unreliable.
+                    note_parts.append(
+                        f"This export also has {', '.join(unmatched_issue_like)}, which weren't recognized and so "
+                        "weren't included - if the score above looks off, this is the most likely reason."
+                    )
+                nap_consistency_note = " ".join(note_parts)
+            else:
                 nap_consistency_note = (
-                    f"Score is based on {', '.join(existing_cols)}. This export also has "
-                    f"{', '.join(unmatched_issue_like)}, which weren't recognized and so weren't "
-                    "included - if the score above looks wrong, this is the most likely reason."
+                    "None of this export's citations have actual Business Name/Address/Zip/Phone data captured "
+                    "yet, so NAP consistency couldn't be assessed - only unclaimed opportunities or citations "
+                    "BrightLocal hasn't deep-checked are present."
                 )
         else:
-            nap_score = None
             if issue_like_cols:
                 nap_consistency_note = (
                     "This BrightLocal export has issue-related columns "
@@ -84,8 +145,12 @@ class LocalVisibilityService:
         return {
             "total_citations": total_citations,
             "active_citations": active_count,
+            "duplicate_citations": duplicate_count,
+            "potential_citation_opportunities": potential_opportunities,
             "high_authority_citations": high_da_count,
+            "high_authority_opportunities": high_da_opportunities,
             "nap_consistency_score": nap_score,
+            "nap_consistency_sample_size": nap_sample_size,
             "nap_consistency_note": nap_consistency_note,
             "nap_consistency_columns_checked": existing_cols,
         }
@@ -141,23 +206,46 @@ class LocalVisibilityService:
                         rank = idx
                         break
 
-                return {"keyword": kw, "map_pack_position": rank, "found": rank is not None}
+                # Google's real "map pack" widget only ever shows the top 3
+                # local results - SerpApi's local_results list can return
+                # well beyond that (position 10, 15, whatever the business
+                # actually ranks at in local search), so a match found deep
+                # in that list is a real local-search rank, but it is NOT
+                # "in the map pack". in_map_pack is what "found"/the
+                # headline stats below actually mean; local_pack_position
+                # is kept as the raw rank for context even when it's beyond
+                # the true 3-pack.
+                in_map_pack = rank is not None and rank <= 3
+                return {
+                    "keyword": kw,
+                    "local_pack_position": rank,
+                    "in_map_pack": in_map_pack,
+                    "found": rank is not None,
+                }
             except Exception as e:
-                return {"keyword": kw, "error": str(e), "found": False}
+                return {"keyword": kw, "error": str(e), "found": False, "in_map_pack": False}
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             results = await asyncio.gather(*(_check_one(client, kw) for kw in keywords))
 
-        positions = [r["map_pack_position"] for r in results if r.get("map_pack_position")]
-        avg_position = round(sum(positions) / len(positions), 2) if positions else None
+        map_pack_positions = [r["local_pack_position"] for r in results if r.get("in_map_pack")]
+        all_found_positions = [r["local_pack_position"] for r in results if r.get("local_pack_position")]
+        avg_position = round(sum(map_pack_positions) / len(map_pack_positions), 2) if map_pack_positions else None
+        avg_local_pack_position = round(sum(all_found_positions) / len(all_found_positions), 2) if all_found_positions else None
         data_source = "live_serpapi" if api_key else "unavailable"
 
         return {
             "business_name": business_name,
             "location": location,
             "data_source": data_source,
+            # "map pack" = the real top-3 widget only, per in_map_pack above.
             "average_map_pack_position": avg_position,
             "total_keywords_tracked": len(keywords),
-            "keywords_in_map_pack": len(positions),
+            "keywords_in_map_pack": len(map_pack_positions),
+            # Wider local-search context (not the 3-pack, but still real
+            # rank data) - a business can be found in local results without
+            # making the actual map pack, and that's worth knowing too.
+            "keywords_found_in_local_results": len(all_found_positions),
+            "average_local_search_position": avg_local_pack_position,
             "keyword_breakdown": results,
         }

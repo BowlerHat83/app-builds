@@ -33,8 +33,19 @@ def generate_12month_historic_traffic(file_bytes: bytes) -> dict:
     curr_traffic_col = next((c for c in df.columns if "current" in c and "traffic" in c), None)
     prev_traffic_col = next((c for c in df.columns if "previous" in c and "traffic" in c), None)
 
-    current_traffic = int(pd.to_numeric(df[curr_traffic_col], errors="coerce").fillna(0).sum()) if curr_traffic_col else 218
-    previous_traffic = int(pd.to_numeric(df[prev_traffic_col], errors="coerce").fillna(0).sum()) if prev_traffic_col else 255
+    # This used to silently fall back to specific hardcoded numbers (218 /
+    # 255) whenever the expected traffic columns weren't found in the CSV -
+    # a fabricated result that looks like real data, not a missing one.
+    # Raising here instead lets the caller (aggregate.py's _try) turn this
+    # into an honest warning and a null block, the same way every other
+    # missing-column case in this codebase is handled.
+    if not curr_traffic_col or not prev_traffic_col:
+        raise ValueError(
+            f"CSV missing expected 'Current Traffic'/'Previous Traffic' columns. Found: {list(df.columns)}"
+        )
+
+    current_traffic = int(pd.to_numeric(df[curr_traffic_col], errors="coerce").fillna(0).sum())
+    previous_traffic = int(pd.to_numeric(df[prev_traffic_col], errors="coerce").fillna(0).sum())
 
     # Monthly variance curve over past 12 months relative to current baseline
     # Simulates organic growth, Google updates, and seasonal shifts

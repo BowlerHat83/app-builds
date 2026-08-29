@@ -134,6 +134,44 @@ def fetch_tech_metrics(target_url: str) -> Dict[str, Any]:
     }
 
 
+# A handful of Lighthouse's "opportunity" audits worth surfacing - these
+# come back inside the same lighthouseResult.audits payload already being
+# fetched for the 5 headline CWV metrics above, so reading a few more keys
+# out of a response already in hand costs nothing extra (no new API call).
+# Each is Lighthouse's own estimate of how many milliseconds fixing that
+# specific issue could save.
+_OPPORTUNITY_AUDITS = [
+    ("render-blocking-resources", "Render-blocking resources"),
+    ("unused-css-rules", "Unused CSS"),
+    ("unused-javascript", "Unused JavaScript"),
+    ("modern-image-formats", "Images not served in next-gen formats (WebP/AVIF)"),
+    ("uses-text-compression", "Text-based resources not compressed"),
+    ("uses-responsive-images", "Images larger than their displayed size"),
+    ("offscreen-images", "Offscreen images not deferred"),
+]
+
+
+def _extract_opportunities(audits: Dict[str, Any]) -> list:
+    opportunities = []
+    for audit_key, label in _OPPORTUNITY_AUDITS:
+        audit = audits.get(audit_key)
+        if not audit:
+            continue
+        savings_ms = audit.get("numericValue")
+        # A present-but-zero (or null) savings figure means Lighthouse
+        # checked this and found nothing worth fixing - only a genuine
+        # positive number means this is really an opportunity.
+        if isinstance(savings_ms, (int, float)) and savings_ms > 0:
+            opportunities.append({
+                "id": audit_key,
+                "label": label,
+                "estimated_savings_ms": round(savings_ms),
+                "display_value": audit.get("displayValue"),
+            })
+    opportunities.sort(key=lambda o: o["estimated_savings_ms"], reverse=True)
+    return opportunities
+
+
 async def fetch_core_web_vitals(target_url: str, strategy: str = "MOBILE") -> Optional[Dict[str, Any]]:
     """
     Real Lighthouse Core Web Vitals via Google's PageSpeed Insights API.
@@ -196,6 +234,7 @@ async def fetch_core_web_vitals(target_url: str, strategy: str = "MOBILE") -> Op
             "above is the standard lab-data proxy for input responsiveness."
         ),
         "source": f"Google Lighthouse (lab data, single simulated {strategy.lower()} run via PageSpeed Insights API)",
+        "opportunities": _extract_opportunities(audits),
         "diagnostics": {
             "requested_url": requested_url,
             "final_url": final_url,

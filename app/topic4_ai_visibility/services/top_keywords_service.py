@@ -2,6 +2,7 @@ import pandas as pd
 from typing import Dict, Any
 from collections import Counter
 import re
+from dateutil import parser as date_parser
 
 def process_top_keywords(sources_df: pd.DataFrame, limit: int = 10) -> Dict[str, Any]:
     if 'Matched Entities' not in sources_df.columns:
@@ -58,3 +59,38 @@ def process_long_form_prompts(facts_df: pd.DataFrame, limit: int = 10) -> Dict[s
         "status": "success",
         "top_search_terms": top_search_terms,
     }
+
+
+def process_facts_overview(facts_df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    The facts export's Date and Status columns are parsed into the
+    dataframe (needed just to read the CSV) but were never actually looked
+    at by anything - Status most plausibly reflects whether the tracked
+    fact was verified/confirmed by the AI engine, and Date lets a reader
+    see what window of activity this snapshot actually covers, rather than
+    treating it as a single undated point-in-time result.
+    """
+    overview: Dict[str, Any] = {"status_breakdown": None, "date_range": None}
+
+    if "Status" in facts_df.columns:
+        counts = facts_df["Status"].dropna().astype(str).str.strip()
+        counts = counts[counts != ""]
+        if len(counts):
+            overview["status_breakdown"] = dict(Counter(counts).most_common())
+
+    if "Date" in facts_df.columns:
+        parsed_dates = []
+        for raw in facts_df["Date"].dropna():
+            try:
+                parsed_dates.append(date_parser.parse(str(raw)))
+            except (ValueError, OverflowError):
+                continue
+        if parsed_dates:
+            overview["date_range"] = {
+                "earliest": min(parsed_dates).date().isoformat(),
+                "latest": max(parsed_dates).date().isoformat(),
+                "dated_rows": len(parsed_dates),
+                "total_rows": len(facts_df),
+            }
+
+    return overview

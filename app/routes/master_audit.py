@@ -153,6 +153,7 @@ async def run_master_audit(
                 backlinks_bytes=ahrefs_backlinks_bytes,
                 keywords_bytes=ahrefs_keywords_bytes,
                 competitors_bytes=ahrefs_competitors_bytes,
+                business_name=business_name,
             ),
             "Topic 3",
         ),

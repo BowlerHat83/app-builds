@@ -41,6 +41,7 @@ async def run_full_audit(
     backlinks_bytes: Optional[bytes] = None,
     keywords_bytes: Optional[bytes] = None,
     competitors_bytes: Optional[bytes] = None,
+    business_name: Optional[str] = None,
     **_ignored,
 ) -> dict:
     """
@@ -107,7 +108,6 @@ async def run_full_audit(
             ("keyword_position", parse_keyword_position_csv),
             ("top_keywords", parse_top_keywords_csv),
             ("content_gaps", parse_content_gaps_csv),
-            ("branded_traffic", calculate_branded_traffic_breakdown),
             ("traffic_impressions", parse_traffic_impressions_csv),
             ("historic_traffic_estimate", generate_12month_historic_traffic),
         ):
@@ -115,6 +115,15 @@ async def run_full_audit(
             data[key] = result
             if warn:
                 warnings.append(warn)
+
+        # branded_traffic needs business_name too (as a fallback classifier
+        # when the CSV has no 'Branded' column of its own - see
+        # branded_traffic_service.py), so it isn't part of the uniform loop
+        # above.
+        branded_result, branded_warn = _try(calculate_branded_traffic_breakdown, keywords_bytes, business_name)
+        data["branded_traffic"] = branded_result
+        if branded_warn:
+            warnings.append(branded_warn)
         if data["historic_traffic_estimate"]:
             data["historic_traffic_estimate"]["methodology_note"] = (
                 "Modeled from current total organic traffic using a typical seasonal curve - "

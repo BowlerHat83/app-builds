@@ -162,6 +162,7 @@ def create_audit_job(
                 backlinks_bytes=ahrefs_backlinks_bytes,
                 keywords_bytes=ahrefs_keywords_bytes,
                 competitors_bytes=ahrefs_competitors_bytes,
+                business_name=business_name,
             ),
             _TOPIC_LABELS["topic3_organic_visibility"],
         )
