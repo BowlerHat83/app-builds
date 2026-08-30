@@ -385,8 +385,26 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
             if use_axe:
                 try:
                     page.add_script_tag(path=str(_VENDOR_AXE_PATH))
+                    # axe.run() is an async call with no timeout parameter of
+                    # its own, and page.evaluate() doesn't impose one either -
+                    # a page with an unusually large/complex DOM can leave the
+                    # renderer scanning far longer than a normal check, which
+                    # showed up live as the whole container getting OOM-killed
+                    # roughly a minute into a WCAG check (nothing on the
+                    # Python side ever got the chance to time it out - the
+                    # 90s outer safe_check budget never even elapsed).
+                    # Racing axe.run() against a JS-side timer bounds how long
+                    # the evaluate() call itself waits - it does NOT cancel
+                    # axe.run() in the page if that side loses the race, so a
+                    # timeout below is treated as a hard failure (see except),
+                    # not a signal to try yet another DOM scan (the custom
+                    # ruleset fallback) on top of one that may still be
+                    # running.
                     axe_output = page.evaluate(
-                        "async () => { return await axe.run(document, { resultTypes: ['violations'] }); }"
+                        "async () => { return await Promise.race(["
+                        "axe.run(document, { resultTypes: ['violations'] }),"
+                        "new Promise((_, reject) => setTimeout(() => reject(new Error('axe.run timed out')), 15000))"
+                        "]); }"
                     )
                     version = page.evaluate("() => (window.axe && window.axe.version) || 'unknown'")
                     return {
@@ -397,11 +415,35 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
                             "DevTools' Accessibility panel and Lighthouse's accessibility score."
                         ),
                     }
-                except Exception:
-                    # axe.min.js present but failed to load/run (corrupt file,
-                    # page CSP blocking injected scripts, etc.) - fall back to
-                    # the custom ruleset below rather than losing the check
-                    # entirely.
+                except Exception as e:
+                    if "axe.run timed out" in str(e):
+                        # axe.run() almost certainly kept scanning in the
+                        # background of this same renderer even after the
+                        # evaluate() call above gave up waiting on it - running
+                        # the custom-ruleset fallback now would be a second
+                        # full DOM scan piled on top of that still-running
+                        # one, exactly the kind of compounding work that OOM-
+                        # killed the container in the first place. Raising
+                        # here (instead of falling through) skips the
+                        # fallback entirely and heads straight to
+                        # `finally: browser.close()`, which forcibly ends
+                        # whatever axe.run() was still doing and reclaims
+                        # its memory immediately. This surfaces as a genuine
+                        # "couldn't measure" warning on Topic 1 (wcag_result
+                        # stays None - see aggregate.py's safe_check) rather
+                        # than a fabricated 0-issues/100-score result, which
+                        # a plain empty raw_issues list here would have been.
+                        raise RuntimeError(
+                            "This page's DOM was too large or complex to finish an accessibility scan "
+                            "within 15 seconds - no WCAG issues could be measured on this run."
+                        ) from e
+                    # axe.min.js present but failed to load/run for some
+                    # other reason (corrupt file, page CSP blocking injected
+                    # scripts, etc.) - fall back to the custom ruleset below
+                    # rather than losing the check entirely. Unlike the
+                    # timeout case above, these failures are fast (axe never
+                    # actually started scanning), so there's no runaway work
+                    # left behind for the fallback to compound with.
                     pass
 
             raw_issues = page.evaluate(_CHECK_SCRIPT)
