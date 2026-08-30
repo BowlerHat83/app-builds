@@ -56,7 +56,29 @@ LOW_MEMORY_CHROMIUM_ARGS = [
     # renderer-process count, and therefore memory, well beyond what a
     # single-page capture needs. Disabling it merges everything back into
     # one renderer process per check.
-    "--disable-features=IsolateOrigins,site-per-process",
+    #
+    # Translate and BackForwardCache are bundled into this SAME
+    # --disable-features flag rather than a second one - Chromium doesn't
+    # merge two separate --disable-features switches, the later one wins
+    # outright, so a second entry would have silently undone the Site
+    # Isolation disabling above instead of adding to it. BackForwardCache
+    # in particular keeps a full in-memory snapshot of a previous page
+    # alive so a back-navigation can restore it instantly - pure overhead
+    # here, since nothing in this app ever navigates backward.
+    "--disable-features=IsolateOrigins,site-per-process,Translate,BackForwardCache",
+    # A live WCAG run showed live container memory jump from 144MB to
+    # 439MB from page.goto() ALONE - before axe.min.js was even injected,
+    # with image/media/font already blocked (see wcag_service.py). That
+    # rules out media payload as the (sole) cause: it's the page's own
+    # JS/CSS/DOM weight. --max-old-space-size caps V8's own heap so it
+    # garbage-collects sooner and smaller instead of growing to whatever
+    # the container happens to report as available; --disk-cache-size=0
+    # and --renderer-process-limit=1 are cheap, safe insurance on top -
+    # a real page's own execution cost is the one thing left that none of
+    # the resource-blocking/rule-scoping changes so far have touched.
+    "--js-flags=--max-old-space-size=192",
+    "--disk-cache-size=0",
+    "--renderer-process-limit=1",
 ]
 
 # A second, coarser cap on top of CHROMIUM_SLOT above. CHROMIUM_SLOT only
