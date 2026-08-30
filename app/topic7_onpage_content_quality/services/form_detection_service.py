@@ -191,10 +191,36 @@ class FormDetectionService:
                 )
                 page = context.new_page()
 
-                for url in candidate_urls:
+                # How many navigations to make on one Playwright page before
+                # closing it and opening a fresh one - long-lived Chromium
+                # pages that keep navigating in a loop are a known way for
+                # renderer memory to creep upward across pages rather than
+                # being fully released on each new page.goto() (detached DOM
+                # nodes, cached resources, etc. that don't always get
+                # reclaimed until the page itself closes). Recycling
+                # periodically gives every few pages a clean slate instead of
+                # letting up to 30 navigations compound in a single session -
+                # cheap (closing/reopening a page is a fraction of a second)
+                # next to what a full container OOM costs.
+                PAGE_RECYCLE_EVERY = 5
+
+                for i, url in enumerate(candidate_urls):
                     if time.perf_counter() - start > time_budget_s:
                         time_budget_hit = True
                         break
+
+                    if i > 0 and i % PAGE_RECYCLE_EVERY == 0:
+                        try:
+                            page.close()
+                        except Exception:
+                            pass
+                        # No set_default_timeout() call here, matching the
+                        # very first page above (this loop never called it
+                        # either) - every action below already passes its
+                        # own explicit timeout where one matters, so this
+                        # only changes when a fresh page/renderer starts,
+                        # not any timeout behavior.
+                        page = context.new_page()
 
                     try:
                         page.goto(url, wait_until="domcontentloaded", timeout=12000)
@@ -204,6 +230,16 @@ class FormDetectionService:
                         continue
 
                     pages_checked.append(url)
+                    # Diagnostic only, same reasoning as the launch-bracket
+                    # logging in browser_lock.py's 4 call sites: a live crash
+                    # after Topic 1's WCAG fix pointed here next (Topic 7's
+                    # crawl reuses one page across up to 30 navigations,
+                    # under CHROMIUM_SLOT the whole time) but without
+                    # per-page visibility there's no way to tell whether it
+                    # was memory creeping across many navigations or one
+                    # specific heavy page - this makes that visible in the
+                    # next run's logs either way.
+                    log_memory(f"Topic 7 form crawl: after page {len(pages_checked)}/{len(candidate_urls)} ({url})")
 
                     try:
                         page_height = page.evaluate("() => document.body.scrollHeight") or None
