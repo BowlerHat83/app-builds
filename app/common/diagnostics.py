@@ -2,7 +2,7 @@
 Lightweight, dependency-free memory visibility for a resource-constrained
 free-tier deployment (see app/common/browser_lock.py for the 512MB ceiling
 this is all in service of). No extra package (no psutil) - just the
-standard library's resource module.
+standard library's resource module plus a direct cgroup read.
 
 resource is POSIX-only (Linux/macOS) and simply doesn't exist on Windows -
 Render's production deploy runs Linux inside Docker, so this works fine
@@ -20,11 +20,45 @@ except ImportError:
     _HAS_RESOURCE = False
 
 
+def _live_container_mb() -> float | None:
+    """
+    Real-time total memory in use by EVERYTHING in this container right
+    now, read straight from the kernel's cgroup accounting - the same
+    number an OOM killer acts on. This closes a specific blind spot in
+    the two ru_maxrss numbers below: RUSAGE_CHILDREN only updates once a
+    child process has been *reaped* (i.e. after browser.close() returns
+    and the OS lets the parent collect its exit status). While a topic's
+    Chromium is still running mid-crawl, it hasn't been reaped yet, so
+    RUSAGE_CHILDREN is still reporting whatever a PREVIOUS, already-closed
+    topic's Chromium peaked at - it cannot see the live Chromium that's
+    actually running right now. This is exactly why a crash could still
+    happen moments after a log line that looked fine: that line's
+    "children" figure was stale by construction, not evidence memory was
+    actually low at that moment.
+
+    Reads cgroup v2 first (current Docker/Render default), falls back to
+    v1. Returns None where neither path exists (local Windows/macOS dev,
+    or any sandbox without /sys/fs/cgroup) - treat that as "unavailable",
+    not "zero".
+    """
+    for path in (
+        "/sys/fs/cgroup/memory.current",
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+    ):
+        try:
+            with open(path) as f:
+                return int(f.read().strip()) / (1024 * 1024)
+        except Exception:
+            continue
+    return None
+
+
 def log_memory(label: str) -> None:
     """
-    Logs the process's peak resident memory (RSS) so far to stdout, which
-    Render's log viewer captures like any other console output. A no-op
-    wherever the resource module isn't available (see module docstring).
+    Logs the process's peak resident memory (RSS) so far, plus a live
+    whole-container reading, to stdout - which Render's log viewer
+    captures like any other console output. A no-op wherever the resource
+    module isn't available (see module docstring).
 
     Important nuance: ru_maxrss is a HIGH-WATER MARK - the largest RSS this
     process has ever reached since it started, not a live/current reading.
@@ -47,7 +81,10 @@ def log_memory(label: str) -> None:
     it's the same high-water-mark reasoning, just for every child process
     this one has ever waited on (Chromium included), so the two numbers
     together show whether a crash was this process or a spawned Chromium
-    instance.
+    instance. But see _live_container_mb() above - both of those numbers
+    are blind to a Chromium instance that's still alive, which is the
+    normal state for most of a crawl. The live container reading has no
+    such gap - it's the third number to check first.
 
     On Linux, ru_maxrss is reported in kilobytes.
     """
@@ -55,4 +92,6 @@ def log_memory(label: str) -> None:
         return
     self_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     children_mb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1024
-    print(f"[mem] {label}: peak RSS so far = {self_mb:.0f}MB self + {children_mb:.0f}MB children (Chromium etc.)", flush=True)
+    live_mb = _live_container_mb()
+    live_part = f", {live_mb:.0f}MB live container total right now" if live_mb is not None else ""
+    print(f"[mem] {label}: peak RSS so far = {self_mb:.0f}MB self + {children_mb:.0f}MB children (Chromium etc.){live_part}", flush=True)

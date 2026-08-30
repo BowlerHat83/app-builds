@@ -202,7 +202,14 @@ class FormDetectionService:
                 # letting up to 30 navigations compound in a single session -
                 # cheap (closing/reopening a page is a fraction of a second)
                 # next to what a full container OOM costs.
-                PAGE_RECYCLE_EVERY = 5
+                # Was 5 - the crash that first justified recycling at all
+                # (see the paragraph above) turned out to still happen
+                # after only 1-2 pages into Topic 7's crawl, before a
+                # single recycle at 5 could ever fire. Tightened to 3 so
+                # a fresh renderer kicks in sooner into a run rather than
+                # letting the first several navigations compound
+                # unchecked.
+                PAGE_RECYCLE_EVERY = 3
 
                 for i, url in enumerate(candidate_urls):
                     if time.perf_counter() - start > time_budget_s:
@@ -239,7 +246,7 @@ class FormDetectionService:
                     # was memory creeping across many navigations or one
                     # specific heavy page - this makes that visible in the
                     # next run's logs either way.
-                    log_memory(f"Topic 7 form crawl: after page {len(pages_checked)}/{len(candidate_urls)} ({url})")
+                    log_memory(f"Topic 7 form crawl: after page {len(pages_checked)}/{len(candidate_urls)} nav ({url})")
 
                     try:
                         page_height = page.evaluate("() => document.body.scrollHeight") or None
@@ -381,6 +388,8 @@ class FormDetectionService:
                             "voluntary_inputs": voluntary,
                             "total_inputs": len(input_names),
                         })
+
+                    log_memory(f"Topic 7 form crawl: after page {len(pages_checked)}/{len(candidate_urls)} processing (CTAs+forms+screenshots) ({url})")
 
             finally:
                 browser.close()
