@@ -23,11 +23,23 @@ DESC_MIN, DESC_MAX = 120, 158
 
 
 def _distribution(series: pd.Series, min_len: int, max_len: int) -> Dict[str, int]:
-    lengths = pd.to_numeric(series, errors="coerce").fillna(0)
+    """
+    Buckets real title/description lengths into under/optimal/over.
+
+    Rows with no title or no meta description at all have no length to
+    bucket - they used to get fillna(0)'d straight into "under", which
+    silently inflated that bucket with pages that don't have a title/
+    description to measure in the first place, skewing the distribution.
+    Those rows are now split out into their own "missing" bucket instead.
+    """
+    lengths = pd.to_numeric(series, errors="coerce")
+    missing = int(lengths.isna().sum())
+    present = lengths.dropna()
     return {
-        "under": int((lengths < min_len).sum()),
-        "optimal": int(((lengths >= min_len) & (lengths <= max_len)).sum()),
-        "over": int((lengths > max_len).sum()),
+        "missing": missing,
+        "under": int((present < min_len).sum()),
+        "optimal": int(((present >= min_len) & (present <= max_len)).sum()),
+        "over": int((present > max_len).sum()),
     }
 
 
