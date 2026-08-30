@@ -405,6 +405,7 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
             if use_axe:
                 try:
                     page.add_script_tag(path=str(_VENDOR_AXE_PATH))
+                    log_memory("Topic 1 WCAG: axe.min.js injected, before axe.run()")
                     # axe.run() is an async call with no timeout parameter of
                     # its own, and page.evaluate() doesn't impose one either -
                     # a page with an unusually large/complex DOM can leave the
@@ -420,10 +421,27 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
                     # not a signal to try yet another DOM scan (the custom
                     # ruleset fallback) on top of one that may still be
                     # running.
+                    # Scoped to WCAG 2/2.1 A+AA rules only (runOnly below) -
+                    # axe's own default run() executes every enabled rule,
+                    # which includes a long tail of "best practice"/
+                    # experimental checks this topic never reports on (it's
+                    # a WCAG compliance grade, not a general best-practices
+                    # audit). Two crashes landed inside this exact call with
+                    # no timeout log ever firing, which only makes sense if
+                    # axe's own scan was still monopolizing the renderer's
+                    # single JS thread when the container got OOM-killed -
+                    # the JS-side race timer literally cannot preempt a
+                    # still-running synchronous rule evaluation, it can only
+                    # fire once axe yields control back. Running fewer,
+                    # narrower rules is a direct cut to that per-page cost,
+                    # not just a tighter bound on top of the same cost.
                     axe_output = page.evaluate(
                         "async () => { return await Promise.race(["
-                        "axe.run(document, { resultTypes: ['violations'] }),"
-                        "new Promise((_, reject) => setTimeout(() => reject(new Error('axe.run timed out')), 15000))"
+                        "axe.run(document, { "
+                        "resultTypes: ['violations'], "
+                        "runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] } "
+                        "}),"
+                        "new Promise((_, reject) => setTimeout(() => reject(new Error('axe.run timed out')), 10000))"
                         "]); }"
                     )
                     version = page.evaluate("() => (window.axe && window.axe.version) || 'unknown'")
@@ -454,10 +472,10 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
                         # stays None - see aggregate.py's safe_check) rather
                         # than a fabricated 0-issues/100-score result, which
                         # a plain empty raw_issues list here would have been.
-                        log_memory("Topic 1 WCAG: axe.run() timed out at 15s, raising")
+                        log_memory("Topic 1 WCAG: axe.run() timed out at 10s, raising")
                         raise RuntimeError(
                             "This page's DOM was too large or complex to finish an accessibility scan "
-                            "within 15 seconds - no WCAG issues could be measured on this run."
+                            "within 10 seconds - no WCAG issues could be measured on this run."
                         ) from e
                     # axe.min.js present but failed to load/run for some
                     # other reason (corrupt file, page CSP blocking injected
