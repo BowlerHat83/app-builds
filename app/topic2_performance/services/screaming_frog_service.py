@@ -22,7 +22,7 @@ TITLE_MIN, TITLE_MAX = 30, 60
 DESC_MIN, DESC_MAX = 120, 158
 
 
-def _distribution(series: pd.Series, min_len: int, max_len: int) -> Dict[str, int]:
+def _distribution(series: pd.Series, min_len: int, max_len: int, missing_mask: Optional[pd.Series]) -> Dict[str, int]:
     """
     Buckets real title/description lengths into under/optimal/over.
 
@@ -31,12 +31,22 @@ def _distribution(series: pd.Series, min_len: int, max_len: int) -> Dict[str, in
     silently inflated that bucket with pages that don't have a title/
     description to measure in the first place, skewing the distribution.
     Those rows are now split out into their own "missing" bucket instead.
+
+    missing_mask has to come from the TITLE/DESCRIPTION column itself
+    (Title 1 / Meta Description 1), not be inferred from the LENGTH
+    column's own blanks - a first attempt did that (lengths.isna()) and
+    came back 0 missing on a real CSV that had 29/388 actually-missing
+    rows, because Screaming Frog's "Title 1 Length"/"Meta Description 1
+    Length" columns export 0 for a missing tag, not a blank cell, so
+    to_numeric().isna() never saw them as missing at all - they were
+    silently still landing in "under" exactly as before this fix.
     """
     lengths = pd.to_numeric(series, errors="coerce")
-    missing = int(lengths.isna().sum())
-    present = lengths.dropna()
+    if missing_mask is None:
+        missing_mask = lengths.isna()
+    present = lengths[~missing_mask]
     return {
-        "missing": missing,
+        "missing": int(missing_mask.sum()),
         "under": int((present < min_len).sum()),
         "optimal": int(((present >= min_len) & (present <= max_len)).sum()),
         "over": int((present > max_len).sum()),
@@ -66,8 +76,14 @@ def analyze_metadata_csv(csv_bytes: bytes) -> Dict[str, Any]:
 
     missing_h1 = int(df[h1_col].isna().sum()) if h1_col else None
 
-    title_distribution = _distribution(df[title_len_col], TITLE_MIN, TITLE_MAX) if title_len_col else None
-    description_distribution = _distribution(df[desc_len_col], DESC_MIN, DESC_MAX) if desc_len_col else None
+    title_missing_mask = df[title_col].isna() if title_col else None
+    description_missing_mask = df[desc_col].isna() if desc_col else None
+    title_distribution = (
+        _distribution(df[title_len_col], TITLE_MIN, TITLE_MAX, title_missing_mask) if title_len_col else None
+    )
+    description_distribution = (
+        _distribution(df[desc_len_col], DESC_MIN, DESC_MAX, description_missing_mask) if desc_len_col else None
+    )
 
     indexability_errors = None
     indexation_errors_by_status_code = None
