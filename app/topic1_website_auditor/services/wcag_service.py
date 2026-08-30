@@ -376,8 +376,28 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
         )
         page = context.new_page()
         page.set_default_timeout(12000)
+        # Two live crashes in a row now land at this exact spot - Chromium
+        # launched, then the container OOM-killed sometime before the
+        # matching "after Chromium closed" log ever fires - and the second
+        # one happened well past the 15s budget the axe.run() race below is
+        # bounded to, meaning axe isn't the only expensive part here. A WCAG
+        # check only needs DOM structure, computed styles and ARIA
+        # attributes - it has no use for the actual bytes of images, video,
+        # or web fonts, which is exactly the kind of payload that inflates a
+        # real marketing homepage's memory footprint in a renderer process.
+        # Blocking those resource types cuts that cost at its root (loading
+        # the page itself) rather than bounding what happens after the page
+        # has already loaded.
+        def _block_heavy_resources(route):
+            if route.request.resource_type in ("image", "media", "font"):
+                route.abort()
+            else:
+                route.continue_()
+
+        page.route("**/*", _block_heavy_resources)
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            log_memory("Topic 1 WCAG: after page.goto()")
             page.wait_for_timeout(1200)
             _dismiss_cookie_banner(page)
             page.wait_for_timeout(400)
@@ -407,6 +427,7 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
                         "]); }"
                     )
                     version = page.evaluate("() => (window.axe && window.axe.version) || 'unknown'")
+                    log_memory("Topic 1 WCAG: after axe.run() succeeded")
                     return {
                         "raw_issues": _axe_violations_to_issues(axe_output.get("violations", [])),
                         "engine": f"axe-core {version}",
@@ -433,6 +454,7 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
                         # stays None - see aggregate.py's safe_check) rather
                         # than a fabricated 0-issues/100-score result, which
                         # a plain empty raw_issues list here would have been.
+                        log_memory("Topic 1 WCAG: axe.run() timed out at 15s, raising")
                         raise RuntimeError(
                             "This page's DOM was too large or complex to finish an accessibility scan "
                             "within 15 seconds - no WCAG issues could be measured on this run."
@@ -447,6 +469,7 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
                     pass
 
             raw_issues = page.evaluate(_CHECK_SCRIPT)
+            log_memory("Topic 1 WCAG: after custom-ruleset scan")
             return {
                 "raw_issues": raw_issues or [],
                 "engine": "custom-ruleset",

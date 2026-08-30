@@ -68,11 +68,26 @@ def _sync_run_gdpr_audit(url: str) -> GDPRCheckResult:
             )
             page = context.new_page()
 
+            # Same reasoning as wcag_service.py's identical block: this
+            # check only ever reads page.content() (raw HTML) and inspects
+            # cookies - it has no use for actual image/video/font bytes, so
+            # blocking those cuts the memory cost of loading a real page at
+            # its root instead of leaving it to whatever headroom happens to
+            # be left after Topic 1's other Chromium-based check.
+            def _block_heavy_resources(route):
+                if route.request.resource_type in ("image", "media", "font"):
+                    route.abort()
+                else:
+                    route.continue_()
+
+            page.route("**/*", _block_heavy_resources)
+
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=20000)
                 page.wait_for_timeout(2000)
             except PlaywrightTimeoutError:
                 pass
+            log_memory("Topic 1 GDPR: after page.goto()")
 
             html_content = page.content()
             soup = BeautifulSoup(html_content, "html.parser")
