@@ -16,6 +16,7 @@ async def start_audit_job(
     target_url: str = Form(..., description="Target website URL"),
     business_name: Optional[str] = Form(None, description="Business name for Local SEO (auto-detected from target_url if omitted)"),
     target_location: Optional[str] = Form(None, description="City/location for local rankings (auto-detected from target_url if omitted)"),
+    core_offering: Optional[str] = Form(None, description="What the business sells, e.g. 'kitchen showroom' - drives Topic 6's map-pack keyword set instead of branded terms"),
     screaming_frog_csv: Optional[UploadFile] = File(None, description="Screaming Frog 'Internal HTML' export - feeds Topic 2 and Topic 7"),
     ahrefs_backlinks_csv: Optional[UploadFile] = File(None, description="Ahrefs Backlinks export - feeds Topic 3"),
     ahrefs_keywords_csv: Optional[UploadFile] = File(None, description="Ahrefs Organic Keywords export - feeds Topic 3"),
@@ -49,6 +50,7 @@ async def start_audit_job(
     provided_inputs = {
         "business_name": business_name or "N/A (auto-detected per topic if possible)",
         "target_location": target_location or "N/A (auto-detected per topic if possible)",
+        "core_offering": core_offering or "N/A (Topic 6 map-pack check falls back to branded keywords if omitted)",
         "screaming_frog_csv": screaming_frog_csv.filename if screaming_frog_csv else "N/A",
         "ahrefs_backlinks_csv": ahrefs_backlinks_csv.filename if ahrefs_backlinks_csv else "N/A",
         "ahrefs_keywords_csv": ahrefs_keywords_csv.filename if ahrefs_keywords_csv else "N/A",
@@ -65,6 +67,7 @@ async def start_audit_job(
         business_name=business_name,
         target_location=target_location,
         provided_inputs=provided_inputs,
+        core_offering=core_offering,
         sf_bytes=sf_bytes,
         ahrefs_backlinks_bytes=ahrefs_backlinks_bytes,
         ahrefs_keywords_bytes=ahrefs_keywords_bytes,

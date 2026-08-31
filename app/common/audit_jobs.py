@@ -104,16 +104,22 @@ async def _run_topic(coro, topic_label: str) -> dict:
 
 
 async def _run_topic6(
-    t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes, enable_screenshot
+    t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes, enable_screenshot, core_offering
 ) -> dict:
     """
-    Topic 6's map-pack rank check wants top unbranded keywords pulled from
-    Topics 3/4/5 (see _extract_unbranded_keywords in master_audit.py), so
-    it can't be dispatched independently like the other six - it has to
-    wait on those three tasks first. Awaiting an already-completed Task
-    returns instantly, so this only actually waits if Topic 6 happens to
-    finish computing its own business-info/screenshot work before all of
-    3/4/5 are done.
+    With a Core Offering supplied, Topic 6 builds its map-pack keyword set
+    entirely on its own (see generate_offering_keywords in
+    topic6/aggregate.py) and no longer needs anything from Topics 3/4/5, so
+    it dispatches immediately alongside every other topic instead of
+    waiting on them - one less thing this topic can be delayed or degraded
+    by if one of those three is slow.
+
+    Without a Core Offering, this falls back to the old behaviour: pulling
+    top unbranded keywords out of whichever of 3/4/5 finish first (see
+    _extract_unbranded_keywords in master_audit.py), which does mean
+    waiting on those three tasks first. Awaiting an already-completed Task
+    returns instantly, so in the common (core_offering-provided) case this
+    wait is skipped entirely rather than just being cheap.
 
     That wait deliberately happens outside TOPIC_SLOT - only the actual
     run_topic6_audit() call below claims a slot. Holding a slot while
@@ -121,10 +127,12 @@ async def _run_topic6(
     progress) would waste it for no reason and could stall the queue for
     everyone else.
     """
-    t3 = await t3_task
-    t4 = await t4_task
-    t5 = await t5_task
-    extra_keywords = _extract_unbranded_keywords(t3, t4, t5, business_name)
+    extra_keywords = None
+    if not core_offering:
+        t3 = await t3_task
+        t4 = await t4_task
+        t5 = await t5_task
+        extra_keywords = _extract_unbranded_keywords(t3, t4, t5, business_name)
     async with TOPIC_SLOT:
         result = await _safe(
             run_topic6_audit(
@@ -133,6 +141,7 @@ async def _run_topic6(
                 target_url=target_url,
                 brightlocal_bytes=brightlocal_bytes,
                 extra_keywords=extra_keywords,
+                core_offering=core_offering,
                 enable_screenshot=enable_screenshot,
             ),
             _TOPIC_LABELS["topic6_local_visibility"],
@@ -147,6 +156,7 @@ def create_audit_job(
     business_name: Optional[str],
     target_location: Optional[str],
     provided_inputs: Dict[str, str],
+    core_offering: Optional[str] = None,
     sf_bytes: Optional[bytes] = None,
     ahrefs_backlinks_bytes: Optional[bytes] = None,
     ahrefs_keywords_bytes: Optional[bytes] = None,
@@ -202,7 +212,10 @@ def create_audit_job(
         )
     )
     t6_task = asyncio.create_task(
-        _run_topic6(t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes, enable_topic6_screenshot)
+        _run_topic6(
+            t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes,
+            enable_topic6_screenshot, core_offering,
+        )
     )
 
     job_id = uuid.uuid4().hex

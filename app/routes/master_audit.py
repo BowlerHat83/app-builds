@@ -115,6 +115,7 @@ async def run_master_audit(
     target_url: str = Form(..., description="Target website URL"),
     business_name: Optional[str] = Form(None, description="Business name for Local SEO (auto-detected from target_url if omitted)"),
     target_location: Optional[str] = Form(None, description="City/location for local rankings (auto-detected from target_url if omitted)"),
+    core_offering: Optional[str] = Form(None, description="What the business sells, e.g. 'kitchen showroom' - drives Topic 6's map-pack keyword set instead of branded terms"),
     screaming_frog_csv: Optional[UploadFile] = File(None, description="Screaming Frog 'Internal HTML' export - feeds Topic 2 and Topic 7"),
     ahrefs_backlinks_csv: Optional[UploadFile] = File(None, description="Ahrefs Backlinks export - feeds Topic 3"),
     ahrefs_keywords_csv: Optional[UploadFile] = File(None, description="Ahrefs Organic Keywords export - feeds Topic 3"),
@@ -165,7 +166,7 @@ async def run_master_audit(
         _safe(run_topic7_audit(target_url=target_url, csv_bytes=sf_bytes), "Topic 7"),
     )
 
-    extra_keywords = _extract_unbranded_keywords(t3, t4, t5, business_name)
+    extra_keywords = None if core_offering else _extract_unbranded_keywords(t3, t4, t5, business_name)
 
     t6 = await _safe(
         run_topic6_audit(
@@ -174,6 +175,7 @@ async def run_master_audit(
             target_url=target_url,
             brightlocal_bytes=brightlocal_bytes,
             extra_keywords=extra_keywords,
+            core_offering=core_offering,
             prewarm_job=prewarm_job,
         ),
         "Topic 6",
@@ -185,6 +187,7 @@ async def run_master_audit(
         "provided_inputs": {
             "business_name": business_name or "N/A (auto-detected per topic if possible)",
             "target_location": target_location or "N/A (auto-detected per topic if possible)",
+            "core_offering": core_offering or "N/A (Topic 6 map-pack check falls back to branded keywords if omitted)",
             "screaming_frog_csv": screaming_frog_csv.filename if screaming_frog_csv else "N/A",
             "ahrefs_backlinks_csv": ahrefs_backlinks_csv.filename if ahrefs_backlinks_csv else "N/A",
             "ahrefs_keywords_csv": ahrefs_keywords_csv.filename if ahrefs_keywords_csv else "N/A",

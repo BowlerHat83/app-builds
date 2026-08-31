@@ -17,12 +17,91 @@ screenshot_svc = GBPScreenshotService()
 extractor_svc = URLExtractorService()
 
 
+# Local-intent phrasings a prospective customer actually types into Google
+# when searching for a category of business - built from a plain "what do
+# you sell" term (core_offering, e.g. "kitchen showroom") rather than the
+# business name. A branded query like "Bowler Hat Manchester" is nearly
+# guaranteed to already rank #1 in the map pack, so folding it into the
+# average told you almost nothing about real local visibility and skewed
+# the score toward looking better than it actually is.
+#
+# Deliberately template-based rather than calling out to an LLM for
+# synonyms: fully deterministic, no new external dependency/cost/failure
+# mode on top of everything already stabilized this session, and every
+# variation stays anchored to the exact phrase supplied - it can't drift
+# into a different service the way an automatically generated synonym
+# occasionally could. local_service.fetch_map_pack_position appends
+# target_location onto every keyword itself when building the live SerpApi
+# query, so location is deliberately left out of these templates - it's
+# the "then add a location" step, just handled one layer down instead of
+# baked into the text here (baking it in here too would send Google a
+# double-location query like "kitchen showroom Manchester Manchester").
+_OFFERING_KEYWORD_TEMPLATES = [
+    "{offering}",
+    "best {offering}",
+    "{offering} near me",
+    "{offering} company",
+    "{offering} services",
+    "local {offering}",
+    "{offering_plural}",
+    "{offering} specialists",
+]
+
+
+def _pluralize(term: str) -> str:
+    """Naive last-word pluralization ("kitchen showroom" -> "kitchen showrooms").
+    Good enough for a keyword variation, not meant to be linguistically exact."""
+    return term if term.endswith("s") else f"{term}s"
+
+
+def _has_adjacent_duplicate_word(phrase: str) -> bool:
+    """Catches the awkward case where the offering itself already ends in a
+    word a template also appends - e.g. core_offering="roofing services"
+    plus the "{offering} services" template would otherwise produce
+    "roofing services services"."""
+    words = phrase.lower().split()
+    return any(a == b for a, b in zip(words, words[1:]))
+
+
+def generate_offering_keywords(core_offering: str, max_count: int = 8) -> list:
+    """
+    Builds a 5-10 term keyword set (8 by default) from a plain core-offering
+    phrase for testing real map-pack rank against how a prospective
+    customer actually searches - see _OFFERING_KEYWORD_TEMPLATES above for
+    why this is template-based rather than branded terms or LLM-generated
+    synonyms. Deduplicates case-insensitively (e.g. an offering that
+    already ends in "s" makes the plural template identical to the base
+    one) and drops any candidate with an awkward repeated word.
+    """
+    offering = " ".join(core_offering.strip().split())
+    if not offering:
+        return []
+
+    candidates = [
+        template.format(offering=offering, offering_plural=_pluralize(offering))
+        for template in _OFFERING_KEYWORD_TEMPLATES
+    ]
+
+    seen = set()
+    keywords = []
+    for kw in candidates:
+        key = kw.lower()
+        if key in seen or _has_adjacent_duplicate_word(kw):
+            continue
+        seen.add(key)
+        keywords.append(kw)
+        if len(keywords) >= max_count:
+            break
+    return keywords
+
+
 async def run_full_audit(
     business_name: Optional[str] = None,
     target_location: Optional[str] = None,
     target_url: Optional[str] = None,
     brightlocal_bytes: Optional[bytes] = None,
     extra_keywords: Optional[list] = None,
+    core_offering: Optional[str] = None,
     prewarm_job: Optional[dict] = None,
     enable_screenshot: bool = False,
     **_ignored,
@@ -70,17 +149,30 @@ async def run_full_audit(
             warnings + ["business_name and target_location are required (or supply target_url so they can be auto-detected)."],
         )
 
-    keywords = [business_name, f"{business_name} {target_location}"]
-    # extra_keywords are the top unbranded keywords sourced from Topic 3
-    # (organic), Topic 4 (AI visibility) and Topic 5 (PPC) - see
-    # _extract_unbranded_keywords in routes/master_audit.py. Testing map-pack
-    # rank against these too (not just business-name variants, which almost
-    # always already rank) shows whether the business actually shows up in
-    # the map pack for what people searching the category tend to type.
-    if extra_keywords:
-        for kw in extra_keywords:
-            if kw and kw not in keywords:
-                keywords.append(kw)
+    if core_offering:
+        # Core-offering-based keywords only - the business name alone and
+        # "business name + location" are deliberately excluded from this
+        # check entirely now (see generate_offering_keywords above for why).
+        keywords = generate_offering_keywords(core_offering)
+    else:
+        # No Core Offering supplied for this run - fall back to the old
+        # branded-seed behaviour (still real data, just skewed toward
+        # queries that are nearly guaranteed to already rank) rather than
+        # returning no map-pack data at all.
+        keywords = [business_name, f"{business_name} {target_location}"]
+        # extra_keywords are the top unbranded keywords sourced from Topic 3
+        # (organic), Topic 4 (AI visibility) and Topic 5 (PPC) - see
+        # _extract_unbranded_keywords in routes/master_audit.py.
+        if extra_keywords:
+            for kw in extra_keywords:
+                if kw and kw not in keywords:
+                    keywords.append(kw)
+        warnings.append(
+            "No Core Offering supplied for this run, so map-pack rank was tested against the business "
+            "name instead of real customer search terms - a branded query almost always already ranks, "
+            "which tends to make this score look better than actual local visibility. Add a Core Offering "
+            "on the intake screen (e.g. \"kitchen showroom\") for a more representative average."
+        )
 
     citations = None
     if brightlocal_bytes:
@@ -148,6 +240,7 @@ async def run_full_audit(
         "topic": "Topic 6: Local Visibility Audit",
         "business_name": business_name,
         "location": target_location,
+        "core_offering": core_offering,
         "citations": citations,
         "map_pack": map_pack,
         "reviews": reviews,
@@ -162,6 +255,7 @@ async def run_audit_all(
     business_name: Optional[str] = Form(None),
     target_location: Optional[str] = Form(None),
     target_url: Optional[str] = Form(None),
+    core_offering: Optional[str] = Form(None, description="What the business sells, e.g. 'kitchen showroom' - drives the map-pack keyword set"),
     brightlocal_csv: Optional[UploadFile] = File(None),
     enable_screenshot: bool = Form(False),
 ):
@@ -169,6 +263,7 @@ async def run_audit_all(
         business_name=business_name,
         target_location=target_location,
         target_url=target_url,
+        core_offering=core_offering,
         brightlocal_bytes=await brightlocal_csv.read() if brightlocal_csv else None,
         enable_screenshot=enable_screenshot,
     )
