@@ -167,6 +167,7 @@ async def run_master_audit(
     )
 
     extra_keywords = None if core_offering else _extract_unbranded_keywords(t3, t4, t5, business_name)
+    organic_keywords = (((t3 or {}).get("data") or {}).get("top_keywords") or {}).get("top_keywords")
 
     t6 = await _safe(
         run_topic6_audit(
@@ -176,6 +177,7 @@ async def run_master_audit(
             brightlocal_bytes=brightlocal_bytes,
             extra_keywords=extra_keywords,
             core_offering=core_offering,
+            organic_keywords=organic_keywords,
             prewarm_job=prewarm_job,
         ),
         "Topic 6",

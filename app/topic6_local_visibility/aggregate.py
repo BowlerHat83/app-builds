@@ -65,10 +65,9 @@ def _has_adjacent_duplicate_word(phrase: str) -> bool:
 
 def generate_offering_keywords(core_offering: str, max_count: int = 8) -> list:
     """
-    Builds a 5-10 term keyword set (8 by default) from a plain core-offering
-    phrase for testing real map-pack rank against how a prospective
-    customer actually searches - see _OFFERING_KEYWORD_TEMPLATES above for
-    why this is template-based rather than branded terms or LLM-generated
+    Builds up to max_count template-based variations from a plain
+    core-offering phrase - see _OFFERING_KEYWORD_TEMPLATES above for why
+    this is template-based rather than branded terms or LLM-generated
     synonyms. Deduplicates case-insensitively (e.g. an offering that
     already ends in "s" makes the plural template identical to the base
     one) and drops any candidate with an awkward repeated word.
@@ -95,6 +94,91 @@ def generate_offering_keywords(core_offering: str, max_count: int = 8) -> list:
     return keywords
 
 
+# Common words too generic to count as a topical match on their own (a
+# core offering of "digital marketing services" shouldn't treat every
+# organic keyword containing "services" as related). Deliberately short -
+# this only needs to filter out connective/filler words, not build a real
+# stopword list.
+_STOPWORDS = {"a", "an", "the", "and", "or", "for", "of", "in", "on", "to", "with", "near", "me", "services", "service"}
+
+
+def _significant_words(phrase: str) -> set:
+    return {w for w in phrase.lower().split() if w not in _STOPWORDS and len(w) > 2}
+
+
+def select_real_offering_keywords(
+    organic_top_keywords: Optional[list], core_offering: str, business_name: Optional[str], limit: int = 3
+) -> list:
+    """
+    Pulls the top real, already-uploaded Ahrefs organic keywords (real
+    search demand, not fabricated) that are both unbranded and topically
+    related to the core offering - walking organic_top_keywords in the
+    order Topic 3 already ranked them (by estimated traffic, then volume -
+    see top_keywords_service.py), so "top 3" means the highest-value real
+    matches, not just the first 3 in the file.
+
+    This is also how real geographic breadth gets in: if the business
+    already ranks organically for a hyper-local suburb query, a city-wide
+    one, and a wider-region one, all three can surface here exactly as
+    real search data shows them - genuinely at whatever scale people are
+    searching, rather than guessed neighbourhood/region names templated in
+    with no evidence they're real search terms.
+    """
+    offering_words = _significant_words(core_offering)
+    if not offering_words:
+        return []
+    business_lower = (business_name or "").strip().lower()
+
+    picked: list = []
+    for row in organic_top_keywords or []:
+        if len(picked) >= limit:
+            break
+        kw = str((row or {}).get("keyword", "")).strip()
+        if not kw:
+            continue
+        kw_lower = kw.lower()
+        if business_lower and business_lower in kw_lower:
+            continue  # still branded - excluded same as everywhere else in this check
+        if not (_significant_words(kw) & offering_words):
+            continue  # not topically related enough to the core offering
+        if kw not in picked:
+            picked.append(kw)
+    return picked
+
+
+def build_topic6_keywords(
+    core_offering: str,
+    business_name: Optional[str],
+    organic_top_keywords: Optional[list],
+    target_count: int = 8,
+    max_real: int = 3,
+) -> list:
+    """
+    Combines up to max_real real, topically-relevant organic keywords
+    (select_real_offering_keywords - prioritized first, since real search
+    data beats a guess) with deterministic template variations
+    (generate_offering_keywords) as the floor/fallback, up to target_count
+    total. The bare core-offering template is always included unless
+    target_count is smaller than max_real + 1, which it never is at the
+    defaults - so there's always at least one deterministic city-tier
+    check even when no Ahrefs CSV was uploaded for this run.
+    """
+    real_keywords = select_real_offering_keywords(organic_top_keywords, core_offering, business_name, limit=max_real)
+    templates = generate_offering_keywords(core_offering, max_count=8)
+
+    seen = set()
+    keywords: list = []
+    for kw in real_keywords + templates:
+        key = kw.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        keywords.append(kw)
+        if len(keywords) >= target_count:
+            break
+    return keywords
+
+
 async def run_full_audit(
     business_name: Optional[str] = None,
     target_location: Optional[str] = None,
@@ -102,6 +186,7 @@ async def run_full_audit(
     brightlocal_bytes: Optional[bytes] = None,
     extra_keywords: Optional[list] = None,
     core_offering: Optional[str] = None,
+    organic_keywords: Optional[list] = None,
     prewarm_job: Optional[dict] = None,
     enable_screenshot: bool = False,
     **_ignored,
@@ -152,8 +237,19 @@ async def run_full_audit(
     if core_offering:
         # Core-offering-based keywords only - the business name alone and
         # "business name + location" are deliberately excluded from this
-        # check entirely now (see generate_offering_keywords above for why).
-        keywords = generate_offering_keywords(core_offering)
+        # check entirely now. Real, topically-relevant organic keywords
+        # (from the already-uploaded Ahrefs export, if any) are prioritized
+        # over the deterministic templates - see build_topic6_keywords
+        # above for why, including how this is what surfaces real
+        # local/city/region-scale variety when it exists.
+        keywords = build_topic6_keywords(core_offering, business_name, organic_keywords)
+        if not organic_keywords:
+            warnings.append(
+                "No Ahrefs Organic Keywords CSV was uploaded for this run, so the map-pack keyword set is "
+                "built entirely from Core Offering wording templates rather than also including real "
+                "customer search terms - upload it for genuine local/city/region geographic variety instead "
+                "of just wording variations on the same location."
+            )
     else:
         # No Core Offering supplied for this run - fall back to the old
         # branded-seed behaviour (still real data, just skewed toward

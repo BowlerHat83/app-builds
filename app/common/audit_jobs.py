@@ -107,19 +107,22 @@ async def _run_topic6(
     t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes, enable_screenshot, core_offering
 ) -> dict:
     """
-    With a Core Offering supplied, Topic 6 builds its map-pack keyword set
-    entirely on its own (see generate_offering_keywords in
-    topic6/aggregate.py) and no longer needs anything from Topics 3/4/5, so
-    it dispatches immediately alongside every other topic instead of
-    waiting on them - one less thing this topic can be delayed or degraded
-    by if one of those three is slow.
+    Topic 6 always waits on Topic 3 (organic keywords) first, whether or
+    not a Core Offering is supplied - with one, it pulls real, topically-
+    relevant Ahrefs organic keywords to prioritize over deterministic
+    template variations (see build_topic6_keywords/
+    select_real_offering_keywords in topic6/aggregate.py); without one, it
+    still needs Topic 3's data for the older _extract_unbranded_keywords
+    fallback. Topic 3 is pure CSV parsing (no Chromium, no live network
+    call), so this wait is fast and doesn't carry the OOM risk the
+    Chromium-heavy topics do.
 
-    Without a Core Offering, this falls back to the old behaviour: pulling
-    top unbranded keywords out of whichever of 3/4/5 finish first (see
-    _extract_unbranded_keywords in master_audit.py), which does mean
-    waiting on those three tasks first. Awaiting an already-completed Task
-    returns instantly, so in the common (core_offering-provided) case this
-    wait is skipped entirely rather than just being cheap.
+    Topics 4/5 are only needed for that older fallback mechanism, so they
+    stay skipped whenever a Core Offering is supplied - one less thing
+    Topic 6 can be delayed or degraded by if either of those two is slow.
+    Awaiting an already-completed Task returns instantly, so this only
+    actually adds a wait if Topic 6 would otherwise have started before
+    the tasks it does need are done.
 
     That wait deliberately happens outside TOPIC_SLOT - only the actual
     run_topic6_audit() call below claims a slot. Holding a slot while
@@ -127,9 +130,11 @@ async def _run_topic6(
     progress) would waste it for no reason and could stall the queue for
     everyone else.
     """
+    t3 = await t3_task
+    organic_keywords = (((t3 or {}).get("data") or {}).get("top_keywords") or {}).get("top_keywords")
+
     extra_keywords = None
     if not core_offering:
-        t3 = await t3_task
         t4 = await t4_task
         t5 = await t5_task
         extra_keywords = _extract_unbranded_keywords(t3, t4, t5, business_name)
@@ -142,6 +147,7 @@ async def _run_topic6(
                 brightlocal_bytes=brightlocal_bytes,
                 extra_keywords=extra_keywords,
                 core_offering=core_offering,
+                organic_keywords=organic_keywords,
                 enable_screenshot=enable_screenshot,
             ),
             _TOPIC_LABELS["topic6_local_visibility"],
