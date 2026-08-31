@@ -25,6 +25,8 @@ async def start_audit_job(
     ppc_keywords_csv: Optional[UploadFile] = File(None, description="PPC keyword-research export - feeds Topic 5"),
     ppc_competitors_csv: Optional[UploadFile] = File(None, description="PPC competitor-overlap export - feeds Topic 5"),
     brightlocal_csv: Optional[UploadFile] = File(None, description="BrightLocal Citation Tracker export - feeds Topic 6"),
+    enable_topic6_screenshot: bool = Form(False, description="Capture a real Google Business Profile screenshot for Topic 6 (opt-in - real-browser page load, adds memory/time cost)"),
+    enable_topic7_screenshots: bool = Form(False, description="Crawl for and screenshot forms for Topic 7 (opt-in - real-browser crawl across up to 30 pages, adds memory/time cost)"),
 ):
     """
     Starts all 7 topics running as independent background tasks and returns
@@ -72,6 +74,8 @@ async def start_audit_job(
         ppc_keywords_bytes=ppc_keywords_bytes,
         ppc_competitors_bytes=ppc_competitors_bytes,
         brightlocal_bytes=brightlocal_bytes,
+        enable_topic6_screenshot=enable_topic6_screenshot,
+        enable_topic7_screenshots=enable_topic7_screenshots,
     )
 
     return get_job_status(job_id)

@@ -103,7 +103,9 @@ async def _run_topic(coro, topic_label: str) -> dict:
     return result
 
 
-async def _run_topic6(t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes) -> dict:
+async def _run_topic6(
+    t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes, enable_screenshot
+) -> dict:
     """
     Topic 6's map-pack rank check wants top unbranded keywords pulled from
     Topics 3/4/5 (see _extract_unbranded_keywords in master_audit.py), so
@@ -131,6 +133,7 @@ async def _run_topic6(t3_task, t4_task, t5_task, business_name, target_location,
                 target_url=target_url,
                 brightlocal_bytes=brightlocal_bytes,
                 extra_keywords=extra_keywords,
+                enable_screenshot=enable_screenshot,
             ),
             _TOPIC_LABELS["topic6_local_visibility"],
         )
@@ -153,6 +156,8 @@ def create_audit_job(
     ppc_keywords_bytes: Optional[bytes] = None,
     ppc_competitors_bytes: Optional[bytes] = None,
     brightlocal_bytes: Optional[bytes] = None,
+    enable_topic6_screenshot: bool = False,
+    enable_topic7_screenshots: bool = False,
 ) -> str:
     """
     Kicks off all 7 topics as independent background tasks and returns a
@@ -191,10 +196,13 @@ def create_audit_job(
         )
     )
     t7_task = asyncio.create_task(
-        _run_topic(run_topic7_audit(target_url=target_url, csv_bytes=sf_bytes), _TOPIC_LABELS["topic7_content_quality"])
+        _run_topic(
+            run_topic7_audit(target_url=target_url, csv_bytes=sf_bytes, enable_form_screenshots=enable_topic7_screenshots),
+            _TOPIC_LABELS["topic7_content_quality"],
+        )
     )
     t6_task = asyncio.create_task(
-        _run_topic6(t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes)
+        _run_topic6(t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes, enable_topic6_screenshot)
     )
 
     job_id = uuid.uuid4().hex

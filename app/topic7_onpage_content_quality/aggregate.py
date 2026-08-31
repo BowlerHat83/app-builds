@@ -14,24 +14,13 @@ router = APIRouter()
 thin_svc = ThinContentService()
 form_det_svc = FormDetectionService()
 
-# Topic 7's Chromium crawl (form detection + screenshots + CTA counts) is
-# paused as of 2026-08-30. Evidence from a live Render run: right before
-# this crawl launched, live container memory (see app/common/diagnostics.py)
-# sat at a comfortable 175MB - one page later, just from navigating the
-# first candidate page with no resource-blocking (deliberately, so form
-# screenshots keep real visual fidelity - see form_detection_service.py),
-# it had already jumped to 506MB, a hair under the free tier's 512MB
-# ceiling, and the container was OOM-killed shortly after. Rather than
-# keep trading off screenshot fidelity or chase this further on a 512MB
-# instance, this was paused by explicit choice while a longer-term call
-# gets made (resource-block the crawl too, or move to a bigger instance).
-# Thin content analysis below is unaffected - it's plain CSV/HTTP parsing,
-# no browser involved. To re-enable, flip this back to True; no other
-# code changes are needed.
-FORM_CRAWL_ENABLED = False
 
-
-async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_bytes: Optional[bytes] = None, **_ignored) -> dict:
+async def run_full_audit(
+    target_url: str = "https://www.bowlerhat.co.uk",
+    csv_bytes: Optional[bytes] = None,
+    enable_form_screenshots: bool = False,
+    **_ignored,
+) -> dict:
     """
     Topic 7: On-Page Content Quality.
 
@@ -46,7 +35,19 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_by
     page visited, so the same form appearing on multiple pages is only
     reported and screenshotted once.
 
-    See FORM_CRAWL_ENABLED above - this crawl is currently paused.
+    enable_form_screenshots defaults to False. Evidence from a live Render
+    run: right before this crawl launched, live container memory (see
+    app/common/diagnostics.py) sat at a comfortable 175MB - one page later,
+    just from navigating the first candidate page with no resource-blocking
+    (deliberately, so form screenshots keep real visual fidelity - see
+    form_detection_service.py), it had already jumped to 506MB, a hair
+    under the free tier's 512MB ceiling, and the container was OOM-killed
+    shortly after. Rather than accept that risk on every run, this crawl is
+    now opt-in per audit (see the checkbox on the intake screen /
+    enable_topic7_screenshots in audit_jobs.py) - the reader explicitly
+    chooses to spend the memory budget on it for a given run. Thin content
+    analysis below is unaffected either way - it's plain CSV/HTTP parsing,
+    no browser involved.
     """
     url = normalize_url(target_url)
     warnings: list = []
@@ -61,12 +62,11 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_by
     form_visual_breakdowns = None
     form_placement_guidance = []
 
-    if not FORM_CRAWL_ENABLED:
+    if not enable_form_screenshots:
         warnings.append(
-            "Form detection, screenshots, CTA counts and placement guidance are paused for this "
-            "audit - the crawl that produces them was crashing the live backend under memory "
-            "pressure (see FORM_CRAWL_ENABLED in app/topic7_onpage_content_quality/aggregate.py). "
-            "Thin content results above are unaffected."
+            "Form detection, screenshots, CTA counts and placement guidance weren't enabled for this "
+            "audit run (opt-in on the intake screen, off by default because this crawl has crashed the "
+            "live backend under memory pressure before). Thin content results above are unaffected."
         )
     else:
         page_selection = select_candidate_form_pages(url, csv_bytes, max_pages=30)
@@ -126,6 +126,7 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_by
 async def run_audit_all(
     target_url: str = Form("https://www.bowlerhat.co.uk"),
     screaming_frog_csv: Optional[UploadFile] = File(None),
+    enable_form_screenshots: bool = Form(False),
 ):
     csv_bytes = await screaming_frog_csv.read() if screaming_frog_csv else None
-    return await run_full_audit(target_url=target_url, csv_bytes=csv_bytes)
+    return await run_full_audit(target_url=target_url, csv_bytes=csv_bytes, enable_form_screenshots=enable_form_screenshots)

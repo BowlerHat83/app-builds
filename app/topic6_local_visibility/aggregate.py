@@ -24,6 +24,7 @@ async def run_full_audit(
     brightlocal_bytes: Optional[bytes] = None,
     extra_keywords: Optional[list] = None,
     prewarm_job: Optional[dict] = None,
+    enable_screenshot: bool = False,
     **_ignored,
 ) -> dict:
     """
@@ -39,6 +40,15 @@ async def run_full_audit(
     flow's first screen (only possible if business_name/target_location
     were both supplied there), this awaits that instead of launching a
     fresh capture.
+
+    enable_screenshot defaults to False - the GBP screenshot launches a
+    real, un-resource-blocked Chromium instance (deliberately, for visual
+    fidelity) and was a live OOM-crash suspect earlier this session, just a
+    lower-probability one than Topic 7's crawl since it's a single page
+    load rather than up to 30. Rather than silently accept that risk on
+    every run, it's now opt-in per audit (see the checkbox on the intake
+    screen / enable_topic6_screenshot in audit_jobs.py) - the reader
+    explicitly chooses to spend the memory budget on it for a given run.
     """
     warnings: list = []
     api_key = os.environ.get("SERPAPI_KEY")
@@ -117,12 +127,19 @@ async def run_full_audit(
     # worst-case queue behind Topic 7's crawl and still complete; a normal
     # capture (a few seconds once it has the browser) finishes just as fast
     # as before.
-    screenshot_awaitable = (prewarm_job or {}).get("screenshot_task") or screenshot_svc.capture_screenshot(
-        business_name, target_location
-    )
-    screenshot, screenshot_warn = await safe_check(screenshot_awaitable, "GBP screenshot capture", timeout=130)
-    if screenshot_warn:
-        warnings.append(screenshot_warn)
+    screenshot = None
+    if enable_screenshot:
+        screenshot_awaitable = (prewarm_job or {}).get("screenshot_task") or screenshot_svc.capture_screenshot(
+            business_name, target_location
+        )
+        screenshot, screenshot_warn = await safe_check(screenshot_awaitable, "GBP screenshot capture", timeout=130)
+        if screenshot_warn:
+            warnings.append(screenshot_warn)
+    else:
+        warnings.append(
+            "GBP screenshot capture wasn't enabled for this audit run (opt-in on the intake screen) - "
+            "no screenshot was taken."
+        )
 
     if not api_key:
         warnings.append("SERPAPI_KEY not configured - map-pack rank and review data are unavailable rather than estimated.")
@@ -146,10 +163,12 @@ async def run_audit_all(
     target_location: Optional[str] = Form(None),
     target_url: Optional[str] = Form(None),
     brightlocal_csv: Optional[UploadFile] = File(None),
+    enable_screenshot: bool = Form(False),
 ):
     return await run_full_audit(
         business_name=business_name,
         target_location=target_location,
         target_url=target_url,
         brightlocal_bytes=await brightlocal_csv.read() if brightlocal_csv else None,
+        enable_screenshot=enable_screenshot,
     )
