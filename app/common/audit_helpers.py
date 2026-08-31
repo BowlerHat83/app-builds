@@ -27,7 +27,15 @@ async def safe_check(coro: Awaitable, label: str, timeout: float = 20.0) -> Tupl
     except asyncio.TimeoutError:
         return None, f"{label} timed out after {timeout:g}s"
     except Exception as e:  # noqa: BLE001 - intentionally broad, this is a resilience boundary
-        return None, f"{label} failed: {e}"
+        # Some exceptions (notably httpx's timeout family - ConnectTimeout,
+        # ReadTimeout, etc.) stringify to an empty message, which used to
+        # produce a warning banner reading just "<label> failed: " with
+        # nothing after the colon - technically present, but useless for
+        # figuring out what actually went wrong without digging through
+        # server logs. Fall back to the exception's class name so there's
+        # always something diagnosable in the message itself.
+        detail = str(e) or type(e).__name__
+        return None, f"{label} failed: {detail}"
 
 
 def envelope(topic: str, data: dict, warnings: Optional[list] = None) -> dict:

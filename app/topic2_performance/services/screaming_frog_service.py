@@ -222,7 +222,18 @@ async def fetch_core_web_vitals(target_url: str, strategy: str = "MOBILE") -> Op
     if not api_key:
         return None
 
-    async with httpx.AsyncClient(timeout=45.0) as client:
+    # A real Lighthouse run against a full page (not a synthetic test URL)
+    # commonly takes 20-45s on Google's own infrastructure, and can run
+    # past that under Google's own queueing/throttling - 45s here was
+    # tight enough that it was firing before the aggregate.py caller's own
+    # 60s safe_check timeout ever got a chance to, which meant a routine
+    # slow-but-otherwise-fine run surfaced as a failure. Raised to 80s,
+    # comfortably under the 90s the caller now allows for the mobile+
+    # desktop pair together - this is a plain outbound HTTP wait, not a
+    # local Chromium/memory-heavy operation, so a longer timeout doesn't
+    # add to this process's own memory pressure the way the topic 6/7
+    # crawls do.
+    async with httpx.AsyncClient(timeout=80.0) as client:
         resp = await client.get(
             "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
             params={"url": target_url, "key": api_key, "category": "PERFORMANCE", "strategy": strategy},

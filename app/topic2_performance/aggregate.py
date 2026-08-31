@@ -39,7 +39,7 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_by
     # both simulated Lighthouse runs happen on Google's own infrastructure,
     # not here, so this is one safe_check covering both rather than two.
     cwv_both, cwv_warn = await safe_check(
-        fetch_core_web_vitals_both(url), "Core Web Vitals (Lighthouse via PageSpeed Insights)", timeout=60
+        fetch_core_web_vitals_both(url), "Core Web Vitals (Lighthouse via PageSpeed Insights)", timeout=90
     )
     if cwv_warn:
         warnings.append(cwv_warn)
