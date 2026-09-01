@@ -58,6 +58,8 @@ async def fetch_sitemap_urls_with_lastmod(sitemap_url: str) -> list[dict]:
 
     async with httpx.AsyncClient(headers=HEADERS, timeout=10.0, follow_redirects=True) as client:
         response = await client.get(target_url)
+        if response.status_code == 404:
+            return []
         response.raise_for_status()
 
     root = ET.fromstring(response.content)

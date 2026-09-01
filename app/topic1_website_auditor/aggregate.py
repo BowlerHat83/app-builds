@@ -141,6 +141,7 @@ async def run_full_audit(
         "technical_standards": {
             "sitemap": {
                 "found": bool(sitemap_urls),
+                "check_failed": bool(sitemap_warn or sitemap_urls_warn),
                 "sitemap_url": sitemap_url,
                 "url_count": len(sitemap_urls) if sitemap_urls else 0,
                 "freshness": sitemap_freshness,

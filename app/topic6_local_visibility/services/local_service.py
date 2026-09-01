@@ -198,6 +198,13 @@ class LocalVisibilityService:
                 }
                 resp = await client.get(url, params=params)
                 data = resp.json()
+                if resp.status_code >= 400 or (isinstance(data, dict) and data.get("error")):
+                    return {
+                        "keyword": kw,
+                        "error": (data.get("error") if isinstance(data, dict) else None) or f"SerpApi returned HTTP {resp.status_code}",
+                        "found": False,
+                        "in_map_pack": False,
+                    }
                 local_results = data.get("local_results", [])
 
                 rank = None
