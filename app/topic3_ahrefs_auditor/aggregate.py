@@ -79,8 +79,25 @@ async def run_full_audit(
         try:
             df_bl = _read_ahrefs_csv(backlinks_bytes)
             total_backlinks = len(df_bl)
-            ref_col = next((c for c in ["Referring domains", "Referring Domain", "Domain"] if c in df_bl.columns), None)
-            ref_domains = int(df_bl[ref_col].nunique()) if ref_col else total_backlinks
+            # "Referring domains" is a numeric per-row metric (how many domains link to
+            # THAT referring page) - not a domain identifier. nunique() on it produced a
+            # meaningless count (86 on a real 2,590-row export whose true unique-referring-
+            # domain count is 1,567). Parse the actual hostname out of the referring page's
+            # own URL instead.
+            url_col = next((c for c in ["Referring page URL", "Referring Page URL", "URL"] if c in df_bl.columns), None)
+            if url_col:
+                from urllib.parse import urlparse
+
+                def _hostname(u):
+                    host = urlparse(u).netloc.lower()
+                    return host[4:] if host.startswith("www.") else host
+
+                hostnames = df_bl[url_col].dropna().astype(str).map(_hostname)
+                hostnames = hostnames[hostnames != ""]
+                ref_domains = int(hostnames.nunique()) if len(hostnames) else total_backlinks
+            else:
+                ref_col = next((c for c in ["Referring Domain", "Domain"] if c in df_bl.columns), None)
+                ref_domains = int(df_bl[ref_col].nunique()) if ref_col else total_backlinks
             # Ahrefs' "Type" column is the link format (text/image/redirect/frame), not
             # dofollow status - that's a separate boolean "Nofollow" column. Checking
             # Type == "Dofollow" (the original logic) never matches real Ahrefs exports
