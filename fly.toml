@@ -1,0 +1,47 @@
+# Fly.io app config for the SEO audit backend.
+#
+# This deploys the existing Dockerfile as-is - no code changes needed to
+# move off Render (same pattern noted when this was researched: CORS is
+# already wide open, and the frontend only needs its VITE_API_BASE_URL
+# env var repointed at whatever URL this app gets).
+#
+# `app` must be globally unique across all of Fly.io - if this name is
+# taken, `fly launch`/`fly apps create` will prompt for a different one.
+app = "bowlerhat-seo-audit-backend"
+primary_region = "lhr"  # London - closest region to a UK-based business/audience
+
+[build]
+  # Auto-detects ./Dockerfile - no Dockerfile changes needed.
+
+[http_service]
+  internal_port = 10000  # matches the Dockerfile's EXPOSE/CMD default
+  force_https = true
+  # Deliberately always-on rather than scale-to-zero: Render's free-tier
+  # sleep/cold-start behaviour has been a repeated source of confusion
+  # this project (rolling-deploy-vs-crash mixups, a prewarm racing a cold
+  # start, etc.) on top of the OOM crashes - min_machines_running = 1
+  # means requests never wait on a cold start, and there's always a
+  # "warm" instance for the in-memory job store to live in. Costs more
+  # than scale-to-zero would; see the deployment notes for the cheaper
+  # alternative if that trade-off isn't worth it during the trial.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # Hits the real "/" route (already returns a live JSON response, no new
+  # endpoint needed) so a machine that's up but internally broken gets
+  # flagged, not just one that's unreachable at the network level.
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # 2GB - 4x Render free tier's 512MB, and comfortable headroom above the
+  # ~500MB peaks seen crashing Render even with Topic 6/7 screenshots
+  # opt-in. Drop to memory = "1gb" (roughly half the cost) if the trial
+  # shows that's still enough - see the deployment notes for both prices.
+  memory = "2gb"
