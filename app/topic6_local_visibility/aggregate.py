@@ -215,6 +215,23 @@ async def run_full_audit(
     explicitly chooses to spend the memory budget on it for a given run.
     """
     warnings: list = []
+
+    # Topic 6 only runs at all when a BrightLocal Citation Tracker CSV was
+    # uploaded - previously map-pack rank, reviews, and the GBP screenshot
+    # all ran off live SerpApi/Chromium calls regardless, with citations
+    # alone silently coming back None. That spent real API/Chromium budget
+    # on a topic whose input wasn't actually supplied for this run.
+    if not brightlocal_bytes:
+        return envelope(
+            "Topic 6: Local Visibility Audit",
+            {},
+            [
+                "No BrightLocal Citation Tracker CSV was uploaded - Topic 6 only runs when this input is "
+                "provided. Upload one to get citation data, map-pack rank, reviews, and the optional GBP "
+                "screenshot for this run."
+            ],
+        )
+
     api_key = os.environ.get("SERPAPI_KEY")
 
     if (not business_name or not target_location) and target_url:

@@ -33,19 +33,29 @@ def generate_12month_historic_traffic(file_bytes: bytes) -> dict:
     curr_traffic_col = next((c for c in df.columns if "current" in c and "traffic" in c), None)
     prev_traffic_col = next((c for c in df.columns if "previous" in c and "traffic" in c), None)
 
-    # This used to silently fall back to specific hardcoded numbers (218 /
-    # 255) whenever the expected traffic columns weren't found in the CSV -
-    # a fabricated result that looks like real data, not a missing one.
-    # Raising here instead lets the caller (aggregate.py's _try) turn this
-    # into an honest warning and a null block, the same way every other
-    # missing-column case in this codebase is handled.
-    if not curr_traffic_col or not prev_traffic_col:
+    # A plain (non date-compared) Ahrefs Organic Keywords export never has
+    # Current/Previous Traffic columns at all - those only appear when the
+    # export was generated with a comparison date range. This methodology
+    # only ever needed a single current-traffic baseline (see the modeled
+    # curve below), so fall back to the export's plain "Organic traffic"
+    # column - present on every export - instead of requiring a comparison
+    # that was never actually necessary. This used to silently fall back to
+    # hardcoded numbers (218 / 255) when no traffic column was found at all
+    # - that's still an honest error, not modeled data.
+    organic_traffic_col = next((c for c in df.columns if c == "organic_traffic"), None)
+
+    if curr_traffic_col:
+        current_traffic = int(pd.to_numeric(df[curr_traffic_col], errors="coerce").fillna(0).sum())
+    elif organic_traffic_col:
+        current_traffic = int(pd.to_numeric(df[organic_traffic_col], errors="coerce").fillna(0).sum())
+    else:
         raise ValueError(
-            f"CSV missing expected 'Current Traffic'/'Previous Traffic' columns. Found: {list(df.columns)}"
+            f"CSV missing a traffic column to model from (looked for 'Current Traffic' or 'Organic traffic'). Found: {list(df.columns)}"
         )
 
-    current_traffic = int(pd.to_numeric(df[curr_traffic_col], errors="coerce").fillna(0).sum())
-    previous_traffic = int(pd.to_numeric(df[prev_traffic_col], errors="coerce").fillna(0).sum())
+    previous_traffic = (
+        int(pd.to_numeric(df[prev_traffic_col], errors="coerce").fillna(0).sum()) if prev_traffic_col else None
+    )
 
     # Monthly variance curve over past 12 months relative to current baseline
     # Simulates organic growth, Google updates, and seasonal shifts
@@ -74,7 +84,7 @@ def generate_12month_historic_traffic(file_bytes: bytes) -> dict:
         "status": "success",
         "current_monthly_traffic": current_traffic,
         "previous_month_traffic": previous_traffic,
-        "traffic_change_mom": current_traffic - previous_traffic,
+        "traffic_change_mom": (current_traffic - previous_traffic) if previous_traffic is not None else None,
         "average_monthly_traffic": average_monthly_traffic,
         "total_estimated_yearly_traffic": total_yearly_traffic,
         "monthly_history_12m": monthly_history
