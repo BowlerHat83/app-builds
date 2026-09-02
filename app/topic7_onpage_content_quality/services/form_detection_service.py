@@ -53,14 +53,26 @@ _CTA_CLASS_RE = re.compile(r"\b(cta|btn-primary|button-primary|btn--primary)\b",
 _COOKIE_ACCEPT_LABELS = ["Accept all", "Accept All", "I agree", "Allow all", "Allow All", "Got it", "OK", "Accept"]
 
 
+_COOKIEBOT_ACCEPT_SELECTOR = "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept"
+
+
 def _dismiss_cookie_banner(page) -> None:
     try:
+        cookiebot_btn = page.locator(_COOKIEBOT_ACCEPT_SELECTOR).first
+        if cookiebot_btn.count() > 0:
+            cookiebot_btn.click(timeout=1500)
+            page.wait_for_timeout(500)
+            return
+    except Exception:
+        pass
+    try:
         for label in _COOKIE_ACCEPT_LABELS:
-            btn = page.get_by_role("button", name=label, exact=False)
-            if btn.count() > 0:
-                btn.first.click(timeout=1500)
-                page.wait_for_timeout(500)
-                return
+            for role in ("button", "link"):
+                btn = page.get_by_role(role, name=label, exact=False)
+                if btn.count() > 0:
+                    btn.first.click(timeout=1500)
+                    page.wait_for_timeout(500)
+                    return
     except Exception:
         pass
 
@@ -371,6 +383,7 @@ class FormDetectionService:
                         filepath = os.path.join(output_dir, filename)
                         try:
                             form.scroll_into_view_if_needed(timeout=3000)
+                            _dismiss_cookie_banner(page)
                             form.screenshot(path=filepath, timeout=5000)
                             status = "captured"
                             screenshot_count += 1
