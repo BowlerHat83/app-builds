@@ -56,6 +56,7 @@ class WCAGAuditResult(BaseModel):
     score: int
     total_issues: int
     total_occurrences: int
+    total_checks: int = 0
     issues: List[WCAGIssue]
     engine: str = "custom-ruleset"
     engine_note: Optional[str] = None
@@ -347,7 +348,7 @@ _CHECK_SCRIPT = r"""
     );
   }
 
-  return issues;
+  return { issues, totalChecks: 15 };
 }
 """
 
@@ -438,7 +439,7 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
                     axe_output = page.evaluate(
                         "async () => { return await Promise.race(["
                         "axe.run(document, { "
-                        "resultTypes: ['violations'], "
+                        "resultTypes: ['violations', 'passes'], "
                         "runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] } "
                         "}),"
                         "new Promise((_, reject) => setTimeout(() => reject(new Error('axe.run timed out')), 10000))"
@@ -446,8 +447,11 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
                     )
                     version = page.evaluate("() => (window.axe && window.axe.version) || 'unknown'")
                     log_memory("Topic 1 WCAG: after axe.run() succeeded")
+                    violation_ids = {v.get("id") for v in axe_output.get("violations", []) if v.get("id")}
+                    pass_ids = {p.get("id") for p in axe_output.get("passes", []) if p.get("id")}
                     return {
                         "raw_issues": _axe_violations_to_issues(axe_output.get("violations", [])),
+                        "total_checks": len(violation_ids | pass_ids),
                         "engine": f"axe-core {version}",
                         "engine_note": (
                             f"Ran using axe-core {version}, the same open-source engine behind Chrome "
@@ -486,10 +490,11 @@ def _run_wcag_checks_sync(url: str) -> Dict[str, Any]:
                     # left behind for the fallback to compound with.
                     pass
 
-            raw_issues = page.evaluate(_CHECK_SCRIPT)
+            check_result = page.evaluate(_CHECK_SCRIPT)
             log_memory("Topic 1 WCAG: after custom-ruleset scan")
             return {
-                "raw_issues": raw_issues or [],
+                "raw_issues": (check_result or {}).get("issues") or [],
+                "total_checks": (check_result or {}).get("totalChecks", 15),
                 "engine": "custom-ruleset",
                 "engine_note": _CUSTOM_RULESET_NOTE,
             }
@@ -503,6 +508,7 @@ def _build_result(
     raw_issues: List[Dict[str, Any]],
     engine: str = "custom-ruleset",
     engine_note: Optional[str] = None,
+    total_checks: int = 0,
 ) -> WCAGAuditResult:
     issues = [
         WCAGIssue(
@@ -518,11 +524,17 @@ def _build_result(
     deduction = sum(_SEVERITY_WEIGHT.get(i.impact.lower(), 3) for i in issues)
     score = max(0, 100 - deduction)
 
+    # total_checks may come back smaller than len(issues) in a pathological
+    # case (e.g. a rule id axe only ever reports as a violation, never as a
+    # pass) - floor it so "no issues" can never go negative on the frontend.
+    total_checks = max(total_checks, len(issues))
+
     return WCAGAuditResult(
         url=url,
         score=score,
         total_issues=len(issues),
         total_occurrences=total_occurrences,
+        total_checks=total_checks,
         issues=issues,
         engine=engine,
         engine_note=engine_note,
@@ -538,4 +550,5 @@ async def fetch_and_audit_wcag(url: str) -> WCAGAuditResult:
         result["raw_issues"],
         engine=result["engine"],
         engine_note=result["engine_note"],
+        total_checks=result.get("total_checks", 0),
     )

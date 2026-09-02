@@ -160,6 +160,7 @@ async def run_full_audit(
             "score": wcag_result.score if wcag_result else None,
             "total_issues": wcag_result.total_issues if wcag_result else None,
             "total_occurrences": wcag_result.total_occurrences if wcag_result else None,
+            "total_checks": wcag_result.total_checks if wcag_result else None,
             "engine": wcag_result.engine if wcag_result else None,
             "engine_note": wcag_result.engine_note if wcag_result else None,
             "by_impact": wcag_buckets,
