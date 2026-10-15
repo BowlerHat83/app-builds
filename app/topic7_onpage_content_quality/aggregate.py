@@ -150,6 +150,23 @@ async def run_full_audit(
                     f"only {crawl_result['pages_checked_count']} were checked. Results below reflect those pages only."
                 )
             form_visual_breakdowns = crawl_result["form_visual_breakdowns"]
+            # The browser crawl only adds screenshots - never let it lose
+            # forms the page-HTML check already found (e.g. pages it skipped
+            # under the memory guard, or forms it couldn't see on load).
+            if http_forms and http_forms.get("unique_forms"):
+                seen = {f["form_id"].split("_", 1)[-1] for f in form_detection["unique_forms"]}
+                seen_urls = {f.get("first_seen_url") for f in form_detection["unique_forms"]}
+                extra_forms = [
+                    f for f in http_forms["unique_forms"]
+                    if f["form_id"].split("_", 1)[-1] not in seen and f.get("first_seen_url") not in seen_urls
+                ]
+                if extra_forms:
+                    form_detection["unique_forms"] = form_detection["unique_forms"] + extra_forms
+                    form_detection["unique_forms_count"] = len(form_detection["unique_forms"])
+                    form_detection["total_forms_found"] = sum(f["occurrence_count"] for f in form_detection["unique_forms"])
+                if not form_detection.get("total_ctas_found") and http_forms.get("total_ctas_found"):
+                    form_detection["total_ctas_found"] = http_forms["total_ctas_found"]
+                    form_detection["avg_ctas_per_page"] = http_forms["avg_ctas_per_page"]
         elif crawl_result is not None:
             crawl_extra["state"] = "unavailable"
             crawl_extra["detail"] = (
