@@ -159,6 +159,14 @@ async def _run_topic6(
     return result
 
 
+async def _run_topic7_after(t6_task, make_coro) -> dict:
+    try:
+        await t6_task
+    except Exception:
+        pass  # Topic 6's own failure is already captured in its envelope
+    return await _run_topic(make_coro(), _TOPIC_LABELS["topic7_content_quality"])
+
+
 def create_audit_job(
     target_url: str,
     business_name: Optional[str],
@@ -215,16 +223,25 @@ def create_audit_job(
             _TOPIC_LABELS["topic5_paid_visibility"],
         )
     )
-    t7_task = asyncio.create_task(
-        _run_topic(
-            run_topic7_audit(target_url=target_url, csv_bytes=sf_bytes, enable_form_screenshots=enable_topic7_screenshots),
-            _TOPIC_LABELS["topic7_content_quality"],
-        )
-    )
     t6_task = asyncio.create_task(
         _run_topic6(
             t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes,
             enable_topic6_screenshot, core_offering, input_sources,
+        )
+    )
+    # Priority: the GBP screenshot (Topic 6) always gets the browser before
+    # Topic 7's form crawl. Both share one Chromium slot, but nothing used to
+    # decide the order - Topic 6 waits on Topic 3 first, so the crawl usually
+    # won the race, and if the crawl took the container down the screenshot
+    # never ran at all. Now Topic 7 simply waits for Topic 6 to finish (the
+    # wait happens outside TOPIC_SLOT, so it blocks nothing else). If memory
+    # does run short, it's Topic 7 that degrades - and it stops early on its
+    # own rather than crashing (see the memory guard in
+    # form_detection_service.py).
+    t7_task = asyncio.create_task(
+        _run_topic7_after(
+            t6_task,
+            lambda: run_topic7_audit(target_url=target_url, csv_bytes=sf_bytes, enable_form_screenshots=enable_topic7_screenshots),
         )
     )
 

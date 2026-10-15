@@ -76,12 +76,13 @@ async def run_full_audit(
         ))
     else:
         sources.append(source("Live form crawl", "live", "Headless-browser crawl of likely form pages for forms, CTAs and screenshots."))
-        extras.append(extra("Form detection & screenshots", "included", "Crawled likely form pages (up to 30)."))
-        page_selection = select_candidate_form_pages(url, csv_bytes, max_pages=30)
+        crawl_extra = extra("Form detection & screenshots", "included", "Crawled likely form pages (up to 10).")
+        extras.append(crawl_extra)
+        page_selection = select_candidate_form_pages(url, csv_bytes, max_pages=10)  # was 30 - lighter crawl
         candidate_urls = page_selection["candidate_urls"]
 
         crawl_result, crawl_warn = await safe_check(
-            form_det_svc.crawl_and_capture(candidate_urls, max_screenshots=10, time_budget_s=80),
+            form_det_svc.crawl_and_capture(candidate_urls, max_screenshots=5, time_budget_s=80),
             "Site-wide form crawl (detection + screenshots)", timeout=100,
         )
         if crawl_warn:
@@ -107,6 +108,11 @@ async def run_full_audit(
                     "Not every page on the site is checked - see candidate_pages_selected / total_pages_discovered_in_csv."
                 ),
             }
+            if crawl_result.get("memory_guard_hit"):
+                crawl_extra["detail"] = (
+                    f"Stopped safely after {crawl_result['pages_checked_count']} of {len(candidate_urls)} pages to protect "
+                    f"the server's memory ({crawl_result.get('memory_at_stop_mb')} MB in use) - results cover those pages only."
+                )
             if crawl_result.get("time_budget_hit"):
                 warnings.append(
                     f"Form crawl hit its time budget before checking all {len(candidate_urls)} candidate pages - "

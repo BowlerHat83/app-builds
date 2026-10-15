@@ -28,7 +28,41 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from app.common.browser_lock import CHROMIUM_SLOT, LOW_MEMORY_CHROMIUM_ARGS
-from app.common.diagnostics import log_memory
+import os
+
+from app.common.diagnostics import log_memory, _live_container_mb
+
+# Stop the form crawl before the container runs out of memory. Topic 7 is the
+# secondary feature - it gives way so the rest of the audit (and the GBP
+# screenshot, which runs before it) survives. Default leaves ~110 MB of
+# headroom under Cloud Run's 512 MiB limit.
+MEMORY_GUARD_MB = float(os.environ.get("FORM_CRAWL_MEMORY_GUARD_MB", "400"))
+
+
+def _total_rss_mb() -> float | None:
+    """
+    Fallback when cgroup accounting isn't exposed (e.g. Cloud Run's default
+    gVisor sandbox): add up resident memory of every process in the
+    container - Python plus every Chromium process it spawned.
+    """
+    total_kb = 0
+    found = False
+    try:
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid}/status") as f:
+                    for line in f:
+                        if line.startswith("VmRSS:"):
+                            total_kb += int(line.split()[1])
+                            found = True
+                            break
+            except Exception:
+                continue
+    except Exception:
+        return None
+    return total_kb / 1024 if found else None
 
 # Loose call-to-action matcher used to estimate "average CTAs per page" -
 # counts <a>/<button> elements whose visible text reads like an action
@@ -183,6 +217,19 @@ class FormDetectionService:
         screenshot_count = 0
         start = time.perf_counter()
         time_budget_hit = False
+        memory_guard_hit = False
+        memory_at_stop = None
+
+        def _over_memory() -> bool:
+            nonlocal memory_guard_hit, memory_at_stop
+            mb = _live_container_mb()
+            if mb is None:
+                mb = _total_rss_mb()
+            if mb is not None and mb > MEMORY_GUARD_MB:
+                memory_guard_hit, memory_at_stop = True, round(mb)
+                log_memory(f"Topic 7 form crawl: memory guard hit ({mb:.0f} MB > {MEMORY_GUARD_MB:.0f} MB) - stopping early")
+                return True
+            return False
 
         total_ctas_found = 0
 
@@ -221,11 +268,20 @@ class FormDetectionService:
                 # a fresh renderer kicks in sooner into a run rather than
                 # letting the first several navigations compound
                 # unchecked.
-                PAGE_RECYCLE_EVERY = 3
+                PAGE_RECYCLE_EVERY = 2
+
+                # Lighter crawl: video/audio never affect how a form looks,
+                # so they're never downloaded.
+                try:
+                    context.route("**/*", lambda route: route.abort() if route.request.resource_type == "media" else route.continue_())
+                except Exception:
+                    pass
 
                 for i, url in enumerate(candidate_urls):
                     if time.perf_counter() - start > time_budget_s:
                         time_budget_hit = True
+                        break
+                    if _over_memory():
                         break
 
                     if i > 0 and i % PAGE_RECYCLE_EVERY == 0:
@@ -425,6 +481,8 @@ class FormDetectionService:
             "pages_checked": pages_checked,
             "pages_checked_count": len(pages_checked),
             "time_budget_hit": time_budget_hit,
+            "memory_guard_hit": memory_guard_hit,
+            "memory_at_stop_mb": memory_at_stop,
             "unique_forms_count": len(unique_forms),
             "unique_forms": list(unique_forms.values()),
             "form_visual_breakdowns": screenshots,
