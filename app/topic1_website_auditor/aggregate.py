@@ -11,6 +11,7 @@ from app.topic1_website_auditor.services.sitemap_service import discover_sitemap
 from app.topic1_website_auditor.services.wcag_service import fetch_and_audit_wcag
 from app.topic1_website_auditor.services.gdpr_service import run_gdpr_audit
 from app.topic1_website_auditor.services.html_checker_service import fetch_and_validate_html
+from app.common.integrations.wcag_scanner import fetch_latest_scan
 
 router = APIRouter()
 
@@ -112,8 +113,18 @@ async def run_full_audit(
     # queue behind Topic 7 and still complete. This only affects the ceiling
     # for a slow/stuck run; a normal WCAG or GDPR pass (a handful of seconds)
     # finishes just as fast as before.
-    wcag_awaitable = (prewarm_job or {}).get("wcag_task") or fetch_and_audit_wcag(url)
-    wcag_result, wcag_warn = await safe_check(wcag_awaitable, "WCAG audit", timeout=90)
+    # Jamie's WCAG 2.2 scanner first: if he's already scanned this site, its
+    # results replace the quick axe-core homepage check (same slot in the
+    # data, so Topic 1's aggregate weighting is unchanged). Only falls back
+    # to axe-core when the scanner has nothing for this site.
+    scanner_block, scanner_note = await fetch_latest_scan(url)
+    wcag_result, wcag_warn = None, None
+    prewarm_wcag = (prewarm_job or {}).get("wcag_task")
+    if scanner_block is None:
+        wcag_awaitable = prewarm_wcag or fetch_and_audit_wcag(url)
+        wcag_result, wcag_warn = await safe_check(wcag_awaitable, "WCAG audit", timeout=90)
+    elif prewarm_wcag is not None and not prewarm_wcag.done():
+        prewarm_wcag.cancel()
     html_result, html_warn = await safe_check(
         asyncio.to_thread(_run_sync, fetch_and_validate_html, url), "HTML syntax validation", timeout=20
     )
@@ -156,7 +167,7 @@ async def run_full_audit(
                 "errors_truncated": bool(html_result and len(html_result.errors) > 50),
             },
         },
-        "wcag_accessibility": {
+        "wcag_accessibility": scanner_block or {
             "score": wcag_result.score if wcag_result else None,
             "total_issues": wcag_result.total_issues if wcag_result else None,
             "total_occurrences": wcag_result.total_occurrences if wcag_result else None,
@@ -171,7 +182,10 @@ async def run_full_audit(
 
     sources = [
         source("Live site checks", "live", "SSL certificate, sitemap discovery and HTML validation run against the live site."),
-        source("WCAG scan (axe-core)", "live", "Automated accessibility scan of the live homepage in a headless browser."),
+        source("WCAG 2.2 scanner", "api", scanner_block["engine_note"])
+        if scanner_block
+        else source("WCAG scan (axe-core)", "live", "Quick automated accessibility check of the live homepage in a headless browser."
+                    + (f" {scanner_note}" if scanner_note else "")),
         source("Cookie/GDPR check", "live", "Live check for a cookie-consent banner and pre-consent tracking."),
     ]
     return envelope("Topic 1: Technical, Security & Standards Audit", data, warnings, sources=sources)

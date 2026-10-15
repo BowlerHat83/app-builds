@@ -73,7 +73,17 @@ def create_job(target_url: str, business_name: Optional[str], target_location: O
     job_id = uuid.uuid4().hex
     url = normalize_url(target_url)
 
-    wcag_task = asyncio.create_task(_run_safely(fetch_and_audit_wcag, url)) if url else None
+    from app.common.integrations.wcag_scanner import fetch_latest_scan
+
+    async def _axe_unless_scanned(u: str):
+        # Skip the headless-browser homepage check when the WCAG 2.2 scanner
+        # already has results for this site - Topic 1 uses those instead.
+        block, _ = await fetch_latest_scan(u)
+        if block:
+            return None
+        return await fetch_and_audit_wcag(u)
+
+    wcag_task = asyncio.create_task(_run_safely(_axe_unless_scanned, url)) if url else None
     gdpr_task = asyncio.create_task(_run_safely(run_gdpr_audit, url)) if url else None
 
     # The GBP screenshot needs an actual business_name + location string -
