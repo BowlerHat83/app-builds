@@ -78,11 +78,22 @@ def parse_ppc_keywords_csv(file_bytes: bytes, limit: int = 25) -> Dict[str, Any]
     }
 
 
-def parse_ppc_competitors_csv(file_bytes: bytes, limit: int = 10) -> Dict[str, Any]:
+def _host(value: str) -> str:
+    v = str(value or "").strip().lower()
+    v = v.split("://", 1)[-1].split("/", 1)[0]
+    return v[4:] if v.startswith("www.") else v
+
+
+def parse_ppc_competitors_csv(file_bytes: bytes, limit: int = 10, exclude_domain: str = "") -> Dict[str, Any]:
     """Parses a PPC competitor-overlap export (Domain Name, Common Keywords, Monthly Paid Keywords/Clicks/Budget)."""
     df = _read_csv(file_bytes)
     if "Domain Name" not in df.columns:
         raise ValueError(f"CSV missing 'Domain Name' column. Columns found: {list(df.columns)}")
+    # SpyFu lists the client's own domain among its "competitors" - drop it,
+    # or the client gets compared against itself.
+    own = _host(exclude_domain)
+    if own:
+        df = df[df["Domain Name"].map(_host) != own]
 
     numeric_cols = ["Common Keywords", "Monthly Paid Keywords", "Monthly Paid Clicks", "Monthly Ad Budget"]
     for col in numeric_cols:

@@ -55,7 +55,7 @@ async def run_full_audit(
     if ppc_competitors_bytes:
         sources.append(source("SpyFu PPC Competitors CSV", "csv", "Uploaded export - paid-search competitors and their budgets."))
         try:
-            data["competitor_share"] = parse_ppc_competitors_csv(ppc_competitors_bytes)
+            data["competitor_share"] = parse_ppc_competitors_csv(ppc_competitors_bytes, exclude_domain=target_url or "")
         except Exception as e:
             warnings.append(f"PPC competitors CSV parse failed: {e}")
     else:

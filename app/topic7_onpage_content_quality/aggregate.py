@@ -8,6 +8,7 @@ from app.topic7_onpage_content_quality.services.form_detection_service import (
     select_candidate_form_pages,
 )
 from app.topic7_onpage_content_quality.services.thin_content_service import ThinContentService
+from app.topic7_onpage_content_quality.services.html_form_service import detect_forms_http
 
 router = APIRouter()
 
@@ -69,14 +70,45 @@ async def run_full_audit(
         sources.append(source("Live homepage fetch", "live", "Thin content checked from the live site only."))
         extras.append(extra("Screaming Frog CSV", "missing", "Upload the Internal HTML export to check thin content across every page."))
 
+    # Form + CTA detection always runs over plain HTTP (no browser, tiny
+    # memory). The opt-in browser crawl below is only for screenshots and
+    # replaces these results when it completes.
+    page_selection = select_candidate_form_pages(url, csv_bytes, max_pages=15)
+    http_forms, http_warn = await safe_check(
+        detect_forms_http(page_selection["candidate_urls"]), "Form detection (page fetch)", timeout=60
+    )
+    if http_warn:
+        warnings.append(http_warn)
+    if http_forms and http_forms["pages_checked_count"]:
+        sources.append(source(
+            "Live page fetch (forms)", "live",
+            f"Checked {http_forms['pages_checked_count']} likely form pages (homepage, contact/quote-style pages) for forms and calls to action.",
+        ))
+        form_detection = {
+            "total_forms_found": sum(f["occurrence_count"] for f in http_forms["unique_forms"]),
+            "unique_forms_count": http_forms["unique_forms_count"],
+            "unique_forms": http_forms["unique_forms"],
+            "pages_checked_count": http_forms["pages_checked_count"],
+            "pages_checked": http_forms["pages_checked"],
+            "candidate_pages_selected": len(page_selection["candidate_urls"]),
+            "total_pages_discovered_in_csv": page_selection["total_pages_discovered_in_csv"],
+            "form_likely_pages_matched": page_selection["form_likely_pages_matched"],
+            "total_ctas_found": http_forms["total_ctas_found"],
+            "avg_ctas_per_page": http_forms["avg_ctas_per_page"],
+            "note": (
+                f"Checked {http_forms['pages_checked_count']} of {len(page_selection['candidate_urls'])} likely form pages "
+                "from the page HTML. Forms loaded by a script appear as embedded forms."
+            ),
+        }
+
     if not enable_form_screenshots:
         extras.append(extra(
-            "Form detection & screenshots", "off",
-            "Opt-in on the intake screen (off by default - the crawl is memory-heavy). Thin content results are unaffected.",
+            "Form screenshots", "off",
+            "Turned off on the intake screen for this audit. Forms are still detected without it.",
         ))
     else:
         sources.append(source("Live form crawl", "live", "Headless-browser crawl of likely form pages for forms, CTAs and screenshots."))
-        crawl_extra = extra("Form detection & screenshots", "included", "Crawled likely form pages (up to 10).")
+        crawl_extra = extra("Form screenshots", "included", "Crawled likely form pages (up to 10) in a headless browser.")
         extras.append(crawl_extra)
         page_selection = select_candidate_form_pages(url, csv_bytes, max_pages=10)  # was 30 - lighter crawl
         candidate_urls = page_selection["candidate_urls"]
@@ -88,7 +120,7 @@ async def run_full_audit(
         if crawl_warn:
             warnings.append(crawl_warn)
 
-        if crawl_result:
+        if crawl_result and crawl_result.get("pages_checked_count"):
             form_placement_guidance = crawl_result.get("form_placement_guidance") or []
             form_detection = {
                 "total_forms_found": sum(f["occurrence_count"] for f in crawl_result["unique_forms"]),
@@ -118,6 +150,12 @@ async def run_full_audit(
                     f"only {crawl_result['pages_checked_count']} were checked. Results below reflect those pages only."
                 )
             form_visual_breakdowns = crawl_result["form_visual_breakdowns"]
+        elif crawl_result is not None:
+            crawl_extra["state"] = "unavailable"
+            crawl_extra["detail"] = (
+                "The screenshot crawl stopped before checking any pages to protect the server's memory. "
+                "Forms were still detected from the page HTML."
+            )
 
     data = {
         "topic": "Topic 7: On-Page Content Quality Audit",

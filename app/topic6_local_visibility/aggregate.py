@@ -377,7 +377,7 @@ async def run_full_audit(
         extras.append(extra("Google Business Profile screenshot", "included" if screenshot else "unavailable",
                             "Captured live." if screenshot else "Enabled, but the capture didn't complete this run."))
     else:
-        extras.append(extra("Google Business Profile screenshot", "off", "Opt-in on the intake screen."))
+        extras.append(extra("Google Business Profile screenshot", "off", "Turned off on the intake screen for this audit."))
 
     if api_key:
         sources.append(source("SerpApi (Google Maps)", "api", f"Live map-pack rank across {len(keywords)} keywords, plus Google reviews."))
