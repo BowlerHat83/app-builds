@@ -31,6 +31,7 @@ import gc
 import time
 import uuid
 from typing import Any, Dict, Optional
+from app.common.audit_helpers import json_safe
 
 from app.topic1_website_auditor.aggregate import run_full_audit as run_topic1_audit
 from app.topic2_performance.aggregate import run_full_audit as run_topic2_audit
@@ -292,7 +293,8 @@ def get_job_status(job_id: str) -> Optional[dict]:
         "status": "success",
         "target_url": job["target_url"],
         "provided_inputs": job["provided_inputs"],
-        "master_audit_results": results,
+        # Safety net: a NaN anywhere would make this whole response a 500.
+        "master_audit_results": json_safe(results),
         "job_id": job_id,
         "complete": complete,
     }

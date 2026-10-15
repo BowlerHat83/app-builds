@@ -8,6 +8,7 @@ topic's public function returns the same envelope shape so the frontend
 (and the master orchestrator) only ever has to handle one response format.
 """
 
+import math
 import asyncio
 from typing import Any, Awaitable, Optional, Tuple
 
@@ -61,6 +62,37 @@ def extra(name: str, state: str, detail: str = "") -> dict:
     return {"name": name, "state": state, "detail": detail}
 
 
+def json_safe(value):
+    """
+    Recursively replace NaN / +-Infinity with None. pandas leaves NaN in
+    blank CSV/API cells, and Python's JSON encoder refuses it - one NaN
+    anywhere made every /audit-status poll return a 500 for the rest of the
+    run (the dashboard showed "Having trouble reaching the audit backend").
+    Also turns numpy scalars into plain Python numbers.
+    """
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, bool) or value is None or isinstance(value, (str, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    # numpy / pandas scalars (np.float32, np.int64, pd.NA, ...)
+    try:
+        import numbers
+        if isinstance(value, numbers.Number):
+            f = float(value)
+            if not math.isfinite(f):
+                return None
+            return int(value) if float(f).is_integer() and "int" in type(value).__name__ else f
+    except Exception:
+        pass
+    if type(value).__name__ in ("NAType", "NaTType"):
+        return None
+    return value
+
+
 def envelope(
     topic: str,
     data: dict,
@@ -88,7 +120,7 @@ def envelope(
     return {
         "status": status,
         "topic": topic,
-        "data": data,
+        "data": json_safe(data),
         "warnings": warnings,
         "sources": sources or [],
         "extras": extras or [],
