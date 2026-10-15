@@ -5,6 +5,7 @@ import pandas as pd
 from fastapi import APIRouter, File, UploadFile
 
 from app.common.audit_helpers import envelope
+from app.common.integrations.ahrefs import fetch_ahrefs_data
 from app.topic3_ahrefs_auditor.services.branded_traffic_service import calculate_branded_traffic_breakdown
 from app.topic3_ahrefs_auditor.services.competitor_share_service import parse_competitor_share_csv
 from app.topic3_ahrefs_auditor.services.content_gap_service import parse_content_gaps_csv
@@ -42,6 +43,7 @@ async def run_full_audit(
     keywords_bytes: Optional[bytes] = None,
     competitors_bytes: Optional[bytes] = None,
     business_name: Optional[str] = None,
+    target_url: Optional[str] = None,
     **_ignored,
 ) -> dict:
     """
@@ -68,7 +70,24 @@ async def run_full_audit(
         "historic_traffic_estimate": None,
     }
 
-    if not any([backlinks_bytes, keywords_bytes, competitors_bytes]):
+    # Any Ahrefs export that wasn't uploaded is pulled from the Ahrefs API
+    # instead, when AHREFS_API_KEY is set (see app/common/integrations/
+    # ahrefs.py). Uploaded CSVs always win. Backlinks come back as a ready-
+    # made summary (real live totals) rather than CSV bytes.
+    api_backlinks_summary = None
+    api, api_notes = await fetch_ahrefs_data(
+        target_url,
+        need_keywords=not keywords_bytes,
+        need_competitors=not competitors_bytes,
+        need_backlinks=not backlinks_bytes,
+    )
+    warnings.extend(api_notes)
+    keywords_bytes = keywords_bytes or api.get("keywords_bytes")
+    competitors_bytes = competitors_bytes or api.get("competitors_bytes")
+    if not backlinks_bytes:
+        api_backlinks_summary = api.get("backlinks_summary")
+
+    if not any([backlinks_bytes, keywords_bytes, competitors_bytes, api_backlinks_summary]):
         return envelope(
             "Topic 3: Off-Page & Organic Visibility Audit",
             data,
@@ -117,6 +136,8 @@ async def run_full_audit(
             }
         except Exception as e:
             warnings.append(f"Backlinks CSV parse failed: {e}")
+    elif api_backlinks_summary:
+        data["backlinks_summary"] = api_backlinks_summary
     else:
         warnings.append("No Ahrefs Backlinks CSV uploaded.")
 

@@ -8,6 +8,7 @@ from app.topic6_local_visibility.services.gbp_review_service import GBPReviewSer
 from app.topic6_local_visibility.services.local_service import LocalVisibilityService
 from app.topic6_local_visibility.services.screenshot_service import GBPScreenshotService
 from app.topic6_local_visibility.services.url_extractor_service import URLExtractorService
+from app.common.integrations.brightlocal import fetch_citation_tracker_csv
 
 router = APIRouter()
 
@@ -221,14 +222,26 @@ async def run_full_audit(
     # all ran off live SerpApi/Chromium calls regardless, with citations
     # alone silently coming back None. That spent real API/Chromium budget
     # on a topic whose input wasn't actually supplied for this run.
+    #
+    # No CSV uploaded? Try the BrightLocal API before giving up (only does
+    # anything when BRIGHTLOCAL_API_KEY is set - see
+    # app/common/integrations/brightlocal.py). An uploaded CSV always wins.
+    if not brightlocal_bytes:
+        brightlocal_bytes, bl_note = await fetch_citation_tracker_csv(
+            business_name=business_name, target_url=target_url, target_location=target_location
+        )
+        if bl_note:
+            warnings.append(bl_note)
+
     if not brightlocal_bytes:
         return envelope(
             "Topic 6: Local Visibility Audit",
             {},
-            [
-                "No BrightLocal Citation Tracker CSV was uploaded - Topic 6 only runs when this input is "
-                "provided. Upload one to get citation data, map-pack rank, reviews, and the optional GBP "
-                "screenshot for this run."
+            warnings
+            + [
+                "No BrightLocal Citation Tracker data for this run (no CSV uploaded, and nothing pulled from the "
+                "BrightLocal API) - Topic 6 only runs when citation data is available. Upload the Citation "
+                "Tracker CSV to get citation data, map-pack rank, reviews, and the optional GBP screenshot."
             ],
         )
 

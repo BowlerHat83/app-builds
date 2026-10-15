@@ -155,6 +155,7 @@ async def run_master_audit(
                 keywords_bytes=ahrefs_keywords_bytes,
                 competitors_bytes=ahrefs_competitors_bytes,
                 business_name=business_name,
+                target_url=target_url,
             ),
             "Topic 3",
         ),

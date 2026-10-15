@@ -78,6 +78,11 @@ def parse_content_gaps_csv(file_bytes: bytes, limit: int = 25) -> dict:
 
     # Drop bare-domain / directory navigational queries - see
     # _is_navigational_domain_keyword above.
+    if gap_df.empty:
+        # Every keyword already ranks on page 1 - no gaps (previously this
+        # crashed with a KeyError, because .apply() on an empty Series
+        # returns an empty DataFrame and the boolean filter below broke).
+        return {"status": "success", "total_content_gaps_found": 0, "content_gaps": []}
     gap_df = gap_df[~gap_df[kw_col].apply(_is_navigational_domain_keyword)]
 
     # Sort gaps by highest potential search volume descending

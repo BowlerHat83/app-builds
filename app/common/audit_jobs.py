@@ -195,6 +195,7 @@ def create_audit_job(
                 keywords_bytes=ahrefs_keywords_bytes,
                 competitors_bytes=ahrefs_competitors_bytes,
                 business_name=business_name,
+                target_url=target_url,
             ),
             _TOPIC_LABELS["topic3_organic_visibility"],
         )
