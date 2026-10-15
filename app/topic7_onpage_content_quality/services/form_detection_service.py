@@ -37,6 +37,13 @@ from app.common.diagnostics import log_memory, _working_set_mb, file_to_data_uri
 # screenshot, which runs before it) survives. Default leaves ~110 MB of
 # headroom under Cloud Run's 512 MiB limit.
 MEMORY_GUARD_MB = float(os.environ.get("FORM_CRAWL_MEMORY_GUARD_MB", "430"))
+# Cloud Run's sandbox reports memory figures above the 512 MiB limit (608-613
+# MB on runs that didn't crash), so an absolute threshold stops the crawl
+# before it starts. The guard watches GROWTH from the reading taken when the
+# crawl's browser is up, and only falls back to the absolute figure when
+# that reading is itself believable (below the limit).
+MEMORY_GROWTH_GUARD_MB = float(os.environ.get("FORM_CRAWL_MEMORY_GROWTH_MB", "120"))
+CONTAINER_LIMIT_MB = float(os.environ.get("CONTAINER_MEMORY_LIMIT_MB", "512"))
 
 
 def _total_rss_mb() -> float | None:
@@ -220,14 +227,23 @@ class FormDetectionService:
         memory_guard_hit = False
         memory_at_stop = None
 
+        baseline_mb = None
+
         def _over_memory() -> bool:
-            nonlocal memory_guard_hit, memory_at_stop
+            nonlocal memory_guard_hit, memory_at_stop, baseline_mb
             mb = _working_set_mb()
             if mb is None:
                 mb = _total_rss_mb()
-            if mb is not None and mb > MEMORY_GUARD_MB:
-                memory_guard_hit, memory_at_stop = True, round(mb)
-                log_memory(f"Topic 7 form crawl: memory guard hit ({mb:.0f} MB > {MEMORY_GUARD_MB:.0f} MB) - stopping early")
+            if mb is None:
+                return False
+            if baseline_mb is None:
+                baseline_mb = mb
+                log_memory(f"Topic 7 form crawl: baseline {mb:.0f} MB with browser open")
+            growth = mb - baseline_mb
+            absolute_trusted = baseline_mb < CONTAINER_LIMIT_MB
+            if growth > MEMORY_GROWTH_GUARD_MB or (absolute_trusted and mb > MEMORY_GUARD_MB):
+                memory_guard_hit, memory_at_stop = True, round(growth)
+                log_memory(f"Topic 7 form crawl: memory guard hit ({mb:.0f} MB, +{growth:.0f} MB since start) - stopping early")
                 return True
             return False
 

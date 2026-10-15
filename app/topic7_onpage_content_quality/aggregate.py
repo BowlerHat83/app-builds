@@ -104,14 +104,13 @@ async def run_full_audit(
                 "note": (
                     f"Checked {crawl_result['pages_checked_count']} of {len(candidate_urls)} candidate pages "
                     f"(homepage + pages matching contact/quote/audit/signup-style URL patterns out of "
-                    f"{page_selection['total_pages_discovered_in_csv']} total pages in the Screaming Frog export). "
-                    "Not every page on the site is checked - see candidate_pages_selected / total_pages_discovered_in_csv."
+                    f"{page_selection['total_pages_discovered_in_csv']} total pages in the Screaming Frog export)."
                 ),
             }
             if crawl_result.get("memory_guard_hit"):
                 crawl_extra["detail"] = (
                     f"Stopped safely after {crawl_result['pages_checked_count']} of {len(candidate_urls)} pages to protect "
-                    f"the server's memory ({crawl_result.get('memory_at_stop_mb')} MB in use) - results cover those pages only."
+                    f"the server's memory (usage rose {crawl_result.get('memory_at_stop_mb')} MB during the crawl) - results cover those pages only."
                 )
             if crawl_result.get("time_budget_hit"):
                 warnings.append(
