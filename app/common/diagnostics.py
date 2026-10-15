@@ -20,6 +20,57 @@ except ImportError:
     _HAS_RESOURCE = False
 
 
+def _working_set_mb() -> float | None:
+    """
+    Memory the container can't give back: cgroup usage minus inactive page
+    cache (the "working set" Kubernetes/Docker report). memory.current alone
+    includes reclaimable file cache, which is why it read 608 MB on a 512 MiB
+    instance that hadn't crashed - useless as a stop signal.
+    """
+    for usage_path, stat_path, key in (
+        ("/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.stat", "inactive_file"),
+        ("/sys/fs/cgroup/memory/memory.usage_in_bytes", "/sys/fs/cgroup/memory/memory.stat", "total_inactive_file"),
+    ):
+        try:
+            with open(usage_path) as f:
+                usage = int(f.read().strip())
+        except Exception:
+            continue
+        inactive = 0
+        try:
+            with open(stat_path) as f:
+                for line in f:
+                    k, _, v = line.partition(" ")
+                    if k == key:
+                        inactive = int(v)
+                        break
+        except Exception:
+            pass
+        return max(usage - inactive, 0) / (1024 * 1024)
+    return None
+
+
+def file_to_data_uri(path: str, mime: str = "image/jpeg") -> str | None:
+    """
+    Inline a screenshot into the audit result. Files on a Cloud Run
+    instance's disk vanish on restart and aren't visible to other instances,
+    so a /static link often 404s by the time the browser asks for it.
+    """
+    import base64, os
+    try:
+        if not path or not os.path.exists(path) or os.path.getsize(path) == 0:
+            return None
+        with open(path, "rb") as f:
+            data = base64.b64encode(f.read()).decode("ascii")
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        return f"data:{mime};base64,{data}"
+    except Exception:
+        return None
+
+
 def _live_container_mb() -> float | None:
     """
     Real-time total memory in use by EVERYTHING in this container right

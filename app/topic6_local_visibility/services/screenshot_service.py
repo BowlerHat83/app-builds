@@ -4,7 +4,7 @@ import asyncio
 from typing import Dict, Any
 
 from app.common.browser_lock import CHROMIUM_SLOT, LOW_MEMORY_CHROMIUM_ARGS
-from app.common.diagnostics import log_memory
+from app.common.diagnostics import log_memory, file_to_data_uri
 
 class GBPScreenshotService:
     def _capture_sync(self, query: str, filepath: str):
@@ -73,10 +73,10 @@ class GBPScreenshotService:
                 try:
                     panel = page.locator('[role="main"]').first
                     panel.wait_for(state="visible", timeout=5000)
-                    panel.screenshot(path=filepath, timeout=5000)
+                    panel.screenshot(path=filepath, type="jpeg", quality=75, timeout=5000)
                 except Exception:
                     try:
-                        page.screenshot(path=filepath, full_page=False, timeout=5000)
+                        page.screenshot(path=filepath, type="jpeg", quality=75, full_page=False, timeout=5000)
                     except Exception:
                         pass
 
@@ -89,7 +89,7 @@ class GBPScreenshotService:
         os.makedirs(output_dir, exist_ok=True)
 
         safe_name = business_name.lower().replace(" ", "_").replace("/", "_")
-        filename = f"gbp_{safe_name}_{location.lower()}.png"
+        filename = f"gbp_{safe_name}_{location.lower()}.jpg"
         filepath = os.path.join(output_dir, filename)
 
         query = f"{business_name} {location}"
@@ -100,11 +100,23 @@ class GBPScreenshotService:
             async with CHROMIUM_SLOT:
                 await loop.run_in_executor(None, self._capture_sync, query, filepath)
 
+            data_uri = file_to_data_uri(filepath)
+            if not data_uri:
+                # Both capture attempts failed silently - no image was written.
+                return {
+                    "business_name": business_name,
+                    "location": location,
+                    "screenshot_filename": None,
+                    "relative_path": None,
+                    "status": "error",
+                    "error_details": "Google Maps loaded but no screenshot was written.",
+                }
+
             return {
                 "business_name": business_name,
                 "location": location,
                 "screenshot_filename": filename,
-                "relative_path": f"/static/screenshots/{filename}",
+                "relative_path": data_uri,
                 "full_filepath": filepath,
                 "source": "Google Maps",
                 "status": "captured"
@@ -113,8 +125,8 @@ class GBPScreenshotService:
             return {
                 "business_name": business_name,
                 "location": location,
-                "screenshot_filename": filename,
-                "relative_path": f"/static/screenshots/{filename}",
+                "screenshot_filename": None,
+                "relative_path": None,
                 "status": "error",
                 "error_details": str(e)
             }

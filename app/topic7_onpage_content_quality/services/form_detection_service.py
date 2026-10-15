@@ -30,13 +30,13 @@ from urllib.parse import urlparse
 from app.common.browser_lock import CHROMIUM_SLOT, LOW_MEMORY_CHROMIUM_ARGS
 import os
 
-from app.common.diagnostics import log_memory, _live_container_mb
+from app.common.diagnostics import log_memory, _working_set_mb, file_to_data_uri
 
 # Stop the form crawl before the container runs out of memory. Topic 7 is the
 # secondary feature - it gives way so the rest of the audit (and the GBP
 # screenshot, which runs before it) survives. Default leaves ~110 MB of
 # headroom under Cloud Run's 512 MiB limit.
-MEMORY_GUARD_MB = float(os.environ.get("FORM_CRAWL_MEMORY_GUARD_MB", "400"))
+MEMORY_GUARD_MB = float(os.environ.get("FORM_CRAWL_MEMORY_GUARD_MB", "430"))
 
 
 def _total_rss_mb() -> float | None:
@@ -222,7 +222,7 @@ class FormDetectionService:
 
         def _over_memory() -> bool:
             nonlocal memory_guard_hit, memory_at_stop
-            mb = _live_container_mb()
+            mb = _working_set_mb()
             if mb is None:
                 mb = _total_rss_mb()
             if mb is not None and mb > MEMORY_GUARD_MB:
@@ -435,12 +435,12 @@ class FormDetectionService:
                             })
                             continue
 
-                        filename = f"form_{sig}.png"
+                        filename = f"form_{sig}.jpg"
                         filepath = os.path.join(output_dir, filename)
                         try:
                             form.scroll_into_view_if_needed(timeout=3000)
                             _dismiss_cookie_banner(page)
-                            form.screenshot(path=filepath, timeout=5000)
+                            form.screenshot(path=filepath, type="jpeg", quality=70, timeout=5000)
                             status = "captured"
                             screenshot_count += 1
                         except Exception as e:
@@ -451,7 +451,7 @@ class FormDetectionService:
                             "form_id": f"form_{sig}",
                             "status": status,
                             "screenshot_filename": filename,
-                            "relative_path": f"/static/screenshots/forms/{filename}" if filename else None,
+                            "relative_path": file_to_data_uri(filepath) if filename else None,
                             "found_on_url": url,
                             "mandatory_inputs": mandatory,
                             "voluntary_inputs": voluntary,

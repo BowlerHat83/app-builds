@@ -371,6 +371,8 @@ async def run_full_audit(
         screenshot, screenshot_warn = await safe_check(screenshot_awaitable, "GBP screenshot capture", timeout=130)
         if screenshot_warn:
             warnings.append(screenshot_warn)
+        if screenshot and screenshot.get("status") != "captured":
+            screenshot = None
     if enable_screenshot:
         extras.append(extra("Google Business Profile screenshot", "included" if screenshot else "unavailable",
                             "Captured live." if screenshot else "Enabled, but the capture didn't complete this run."))

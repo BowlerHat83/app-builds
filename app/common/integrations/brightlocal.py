@@ -3,19 +3,12 @@ BrightLocal Citation Tracker integration (Topic 6).
 
 Uses BrightLocal's Citation Tracker API (v2):
   GET /ct/get-all      - list every Citation Tracker report on the account
-  GET /ct/get-results  - one report's results, including links to the exact
-                         same CSV export the intake screen already accepts
+  GET /ct/get-results  - one report's citations as JSON
 
-Because get-results hands back a link to the real Citation Tracker CSV,
-the preferred path downloads that file and feeds its bytes straight into
-LocalVisibilityService.process_brightlocal_csv - identical parsing and
-scoring to a manual upload. Only if that download fails does it fall back
-to rebuilding a minimal CSV from the JSON (citations + potential
-opportunities + domain authority). That fallback deliberately leaves out
-the per-field NAP issue columns: their JSON shape isn't documented, and
-inventing empty issue columns would make every citation look "clean" -
-the same fabricated-100% problem process_brightlocal_csv was rewritten to
-avoid. Without them, NAP consistency honestly reports as unavailable.
+The JSON is the source: get-results' csv_url is an admin link behind a
+BrightLocal login, so it can't be fetched server-side. Each citation's
+need_to_fix flags become the per-field issue columns, so citations, domain
+authority, opportunities and NAP consistency all come from the API.
 """
 
 import csv
@@ -87,26 +80,48 @@ def _pick_report(
     return candidates[0][3]
 
 
+# BrightLocal's per-citation "need_to_fix" flags -> the per-field issue
+# columns process_brightlocal_csv scores NAP consistency from.
+_FIX_COLUMNS = {
+    "name": "Business Name Issue",
+    "address": "Address Issue",
+    "postcode": "Zip/Postcode Issue",
+    "phone": "Phone Number Issue",
+}
+
+
 def _rows_from_json(results: Dict[str, Any]) -> bytes:
-    """Fallback: rebuild a minimal Citation Tracker CSV from the get-results JSON."""
+    """
+    Build the Citation Tracker table from get-results JSON - the primary
+    source (the API's csv_url is an admin link that needs a BrightLocal
+    login, so it can't be downloaded server-side). Each active citation's
+    need_to_fix list (e.g. ["phone", "postcode"]) becomes the matching
+    issue column, so NAP consistency works straight from the API.
+    """
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["Domain", "Status", "Domain Authority", "Business Name", "Address", "Zip/Postcode", "Phone Number", "Citation Link"])
+    writer.writerow(["Domain", "Status", "Domain Authority", "Business Name", "Address", "Zip/Postcode", "Phone Number",
+                     "Citation Link", "NAP Checked"] + list(_FIX_COLUMNS.values()))
 
     seen = set()
     for row in results.get("active") or []:
         domain = row.get("source") or _domain(row.get("url"))
         seen.add(domain)
+        fixes = [str(f).lower() for f in (row.get("need_to_fix") or [])]
+        # BrightLocal has checked NAP on a citation when it captured name/
+        # postcode or flagged something to fix - anything else is unverified.
+        checked = bool(row.get("business-name") or row.get("postcode") or fixes)
         writer.writerow([
             domain,
-            row.get("status") or "active",
+            row.get("citation-status") or "active",
             row.get("domain-authority"),
             row.get("business-name") or "",
             row.get("address") or "",
             row.get("postcode") or "",
             row.get("telephone") or "",
             row.get("url") or "",
-        ])
+            "Yes" if checked else "",
+        ] + ["Yes" if key in fixes else "" for key in _FIX_COLUMNS])
 
     possible = results.get("possible") or {}
     if isinstance(possible, dict):
@@ -114,9 +129,24 @@ def _rows_from_json(results: Dict[str, Any]) -> bytes:
             if domain in seen:
                 continue
             da = info.get("domain-authority") if isinstance(info, dict) else None
-            writer.writerow([domain, "Potential", da, "", "", "", "", ""])
+            writer.writerow([domain, "Potential", da, "", "", "", "", "", ""] + [""] * len(_FIX_COLUMNS))
 
     return out.getvalue().encode("utf-8")
+
+
+def _stale_note(last_run: Optional[str]) -> Optional[str]:
+    """Flag a Citation Tracker report that hasn't been re-run in over 6 months."""
+    from datetime import datetime
+    try:
+        run = datetime.strptime(str(last_run)[:10], "%Y-%m-%d")
+    except Exception:
+        return None
+    months = (datetime.now() - run).days // 30
+    if months < 6:
+        return None
+    return (f" This report was last run {months // 12} year(s) {months % 12} month(s) ago - re-run it in BrightLocal "
+            "for current figures." if months >= 12 else
+            f" This report was last run {months} months ago - re-run it in BrightLocal for current figures.")
 
 
 def clean_report_name(name: Optional[str]) -> str:
@@ -185,25 +215,10 @@ async def fetch_citation_tracker_csv(
             if report.get("last_run"):
                 label += f" (last run {str(report['last_run'])[:10]})"
 
-            urls = results.get("urls") or {}
-            for key in ("public_csv_url", "csv_url"):
-                link = urls.get(key)
-                if not link:
-                    continue
-                try:
-                    csv_resp = await client.get(link)
-                    body = csv_resp.content
-                    looks_like_csv = csv_resp.status_code == 200 and body[:200].lstrip(b"\xef\xbb\xbf").startswith(b'"Domain"')
-                    if looks_like_csv:
-                        return body, f"Citation data pulled automatically from {label} via the BrightLocal API."
-                except httpx.HTTPError:
-                    continue
-
             if results.get("active") or results.get("possible"):
-                return _rows_from_json(results), (
-                    f"Citation data pulled from {label} via the BrightLocal API (summary data only - the full CSV "
-                    "export couldn't be downloaded, so NAP consistency isn't available for this run)."
-                )
+                note = f"Citation data pulled from {label} via the BrightLocal API."
+                stale = _stale_note(report.get("last_run"))
+                return _rows_from_json(results), (note + stale) if stale else note
             return None, f"{label} returned no citation data - upload the Citation Tracker CSV instead."
 
     except httpx.HTTPStatusError as e:

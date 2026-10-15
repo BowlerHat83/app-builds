@@ -30,8 +30,11 @@ class LocalVisibilityService:
             is_potential = status_norm == "potential"
             citation_rows = df[~is_potential]
             potential_rows = df[is_potential]
-            active_count = int((status_norm == "active").sum())
             duplicate_count = int((status_norm == "duplicate").sum())
+            # Anything that's neither Potential nor Duplicate is a live
+            # citation. The API fallback reports statuses other than the
+            # CSV's literal "active" (it showed "19 of 0 active citations").
+            active_count = int(len(citation_rows)) - duplicate_count
         else:
             citation_rows = df
             potential_rows = df.iloc[0:0]
@@ -94,7 +97,11 @@ class LocalVisibilityService:
         # captured NAP data for.
         core_field_aliases = ["business name", "address", "zip/postcode", "phone number"]
         existing_core_cols = [normalized_cols[alias] for alias in core_field_aliases if alias in normalized_cols]
-        checked_rows = citation_rows[citation_rows[existing_core_cols].notna().any(axis=1)] if existing_core_cols else citation_rows
+        if "NAP Checked" in df.columns:
+            # API-built table: BrightLocal's own per-citation "checked" signal.
+            checked_rows = citation_rows[citation_rows["NAP Checked"].notna()]
+        else:
+            checked_rows = citation_rows[citation_rows[existing_core_cols].notna().any(axis=1)] if existing_core_cols else citation_rows
         nap_sample_size = int(len(checked_rows))
 
         nap_consistency_note = None
