@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, UploadFile
 
-from app.common.audit_helpers import envelope, hostname_of, read_csv_robust
+from app.common.audit_helpers import envelope, hostname_of, read_csv_robust, source, extra
 from app.topic4_ai_visibility.services.engine_visibility_service import process_engine_visibility
 from app.topic4_ai_visibility.services.top_competitors_service import process_top_competitors
 from app.topic4_ai_visibility.services.top_keywords_service import (
@@ -47,6 +47,11 @@ async def run_full_audit(
 
     facts_df = None
     sources_df = None
+    sources, extras = [], []
+    if facts_bytes:
+        sources.append(source("Waikay Facts CSV", "csv", "Uploaded export - facts each AI engine states about the brand, per prompt."))
+    if sources_bytes:
+        sources.append(source("Waikay Knowledge Sources CSV", "csv", "Uploaded export - sites and URLs the AI engines cite."))
 
     if facts_bytes:
         try:
@@ -54,7 +59,7 @@ async def run_full_audit(
         except Exception as e:
             warnings.append(f"Facts CSV parse failed: {e}")
     else:
-        warnings.append("No AI-visibility facts CSV uploaded.")
+        extras.append(extra("Waikay Facts CSV", "missing", "Needed (with the Knowledge Sources CSV) for the engine visibility breakdown and search terms."))
 
     if sources_bytes:
         try:
@@ -62,7 +67,7 @@ async def run_full_audit(
         except Exception as e:
             warnings.append(f"Sources CSV parse failed: {e}")
     else:
-        warnings.append("No AI-visibility knowledge-sources CSV uploaded.")
+        extras.append(extra("Waikay Knowledge Sources CSV", "missing", "Needed for competitors, cited URLs and the engine visibility breakdown."))
 
     if facts_df is not None and sources_df is not None:
         result = process_engine_visibility(facts_df, sources_df)
@@ -70,7 +75,7 @@ async def run_full_audit(
     elif facts_df is None and sources_df is None:
         pass
     else:
-        warnings.append("Engine visibility breakdown needs both the facts CSV and the sources CSV.")
+        pass  # covered by the missing-CSV entries in extras
 
     if facts_df is not None:
         try:
@@ -148,7 +153,7 @@ async def run_full_audit(
             "cited_search_terms_count": cited_terms,
         }
 
-    return envelope("Topic 4: AI Visibility Audit", data, warnings)
+    return envelope("Topic 4: AI Visibility Audit", data, warnings, sources=sources, extras=extras)
 
 
 @router.post("/audit-all", summary="Run Topic 4 Audit with AI-visibility exports")

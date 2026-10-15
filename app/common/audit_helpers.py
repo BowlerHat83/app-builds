@@ -38,7 +38,36 @@ async def safe_check(coro: Awaitable, label: str, timeout: float = 20.0) -> Tupl
         return None, f"{label} failed: {detail}"
 
 
-def envelope(topic: str, data: dict, warnings: Optional[list] = None) -> dict:
+def source(name: str, kind: str, detail: str = "") -> dict:
+    """
+    One data source actually used for a topic on this run - shown in the
+    'Sources' panel at the top of each topic tab. kind is one of:
+    "csv" (uploaded export), "api" (pulled from a tool's API),
+    "live" (checked live against the site/Google), "estimate" (modelled or
+    a lower-fidelity fallback - always explained in detail).
+    """
+    return {"name": name, "kind": kind, "detail": detail}
+
+
+def extra(name: str, state: str, detail: str = "") -> dict:
+    """
+    An optional input or feature for a topic and whether it was part of this
+    run - shown under 'Additional inputs & features'. state is one of:
+    "included", "missing" (could have been supplied but wasn't), "off"
+    (opt-in feature not enabled), "unavailable" (server not configured for it).
+    These replace what used to be warning banners for routine things like a
+    CSV not being uploaded or a screenshot being switched off.
+    """
+    return {"name": name, "state": state, "detail": detail}
+
+
+def envelope(
+    topic: str,
+    data: dict,
+    warnings: Optional[list] = None,
+    sources: Optional[list] = None,
+    extras: Optional[list] = None,
+) -> dict:
     """
     Standard response shape every topicN.aggregate.run_full_audit() returns.
 
@@ -49,7 +78,7 @@ def envelope(topic: str, data: dict, warnings: Optional[list] = None) -> dict:
     """
     warnings = warnings or []
     has_data = bool(data)
-    if not has_data and warnings:
+    if not has_data:
         status = "error"
     elif warnings:
         status = "partial"
@@ -61,6 +90,8 @@ def envelope(topic: str, data: dict, warnings: Optional[list] = None) -> dict:
         "topic": topic,
         "data": data,
         "warnings": warnings,
+        "sources": sources or [],
+        "extras": extras or [],
     }
 
 

@@ -66,18 +66,21 @@ async def fetch_ahrefs_data(
     need_keywords: bool = True,
     need_competitors: bool = True,
     need_backlinks: bool = True,
-) -> Tuple[Dict[str, Any], list]:
+) -> Tuple[Dict[str, Any], list, Dict[str, str]]:
     """
-    Returns (result, notes). result may contain:
+    Returns (result, notes, sources). result may contain:
       "keywords_bytes"    - CSV bytes shaped like Ahrefs' Organic Keywords export
       "competitors_bytes" - CSV bytes shaped like Ahrefs' Organic Competitors export
       "backlinks_summary" - dict ready for data["backlinks_summary"]
-    Anything that couldn't be fetched is simply absent; notes explain why.
+    Anything that couldn't be fetched is simply absent. notes = genuine
+    failures only (bad key, out of units...). sources maps "keywords" /
+    "competitors" / "backlinks" to a one-line description of what was pulled,
+    for the topic's Sources panel.
     """
     api_key = os.environ.get("AHREFS_API_KEY")
     target = _target(target_url)
     if not api_key or not target or not any([need_keywords, need_competitors, need_backlinks]):
-        return {}, []
+        return {}, [], {}
 
     country = os.environ.get("AHREFS_COUNTRY", "gb")
     today = date.today()
@@ -85,7 +88,7 @@ async def fetch_ahrefs_data(
     common = {"target": target, "mode": "subdomains", "date": today.isoformat()}
     result: Dict[str, Any] = {}
     notes: list = []
-    pulled = []
+    pulled: Dict[str, str] = {}
 
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     async with httpx.AsyncClient(timeout=TIMEOUT, headers=headers) as client:
@@ -127,8 +130,9 @@ async def fetch_ahrefs_data(
                         line += [r.get("best_position_prev"), r.get("sum_traffic_prev")]
                     body.append(line)
                 result["keywords_bytes"] = _csv(header, body)
-                pulled.append(
-                    f"{len(rows)} organic keywords (top {len(top)} by traffic + {len(rows) - len(top)} ranking 11-50)"
+                pulled["keywords"] = (
+                    f"{len(rows)} organic keywords for {target} ({country.upper()}): top {len(top)} by traffic "
+                    f"+ {len(rows) - len(top)} ranking 11-50" + ("; vs 3 months ago" if has_prev else "")
                 )
             except Exception as e:
                 notes.append(f"Ahrefs API organic keywords failed ({_why(e)}).")
@@ -148,7 +152,7 @@ async def fetch_ahrefs_data(
                     [[r.get("competitor_domain"), r.get("domain_rating"), r.get("keywords_common"),
                       r.get("keywords_competitor"), f"{r.get('share') or 0}%"] for r in rows],
                 )
-                pulled.append(f"{len(rows)} organic competitors")
+                pulled["competitors"] = f"Top {len(rows)} organic competitors by keyword share ({country.upper()})."
             except Exception as e:
                 notes.append(f"Ahrefs API organic competitors failed ({_why(e)}).")
 
@@ -177,13 +181,116 @@ async def fetch_ahrefs_data(
                         if sample else "Live backlink and referring-domain totals straight from Ahrefs."
                     ),
                 }
-                pulled.append(f"backlink totals ({live:,} live backlinks, {refdomains:,} referring domains)")
+                pulled["backlinks"] = (
+                    f"Live totals: {live:,} backlinks from {refdomains:,} referring domains"
+                    + (f"; dofollow split from a {len(sample)}-link sample." if sample else ".")
+                )
             except Exception as e:
                 notes.append(f"Ahrefs API backlinks failed ({_why(e)}).")
 
-    if pulled:
-        notes.insert(0, f"Pulled automatically from the Ahrefs API for {target} ({country.upper()}): " + ", ".join(pulled) + ".")
-    return result, notes
+    return result, notes, pulled
+
+
+USD_TO_GBP = float(os.environ.get("AHREFS_USD_TO_GBP", "0.75"))
+
+
+async def fetch_paid_estimate(target_url: Optional[str], competitor_limit: int = 10) -> Tuple[Optional[Dict[str, Any]], list, str]:
+    """
+    Topic 5 fallback when no SpyFu exports are uploaded. Ahrefs' API has no
+    paid-keyword list or paid-competitor list, so this is deliberately an
+    estimate:
+      - the client's paid keywords / paid traffic / paid spend come from
+        site-explorer/metrics (domain-level totals)
+      - 'top keywords' are the top keyword of each paid landing page
+        (site-explorer/paid-pages)
+      - competitors are the client's ORGANIC competitors, with each one's
+        paid figures from site-explorer/metrics, keeping only those that
+        actually show paid activity
+    Ahrefs reports cost in USD cents; converted to GBP at AHREFS_USD_TO_GBP
+    so it sits alongside the rest of Topic 5. ~600 units per audit.
+
+    Returns (data_for_topic5 or None, failure_notes, source_detail).
+    """
+    api_key = os.environ.get("AHREFS_API_KEY")
+    target = _target(target_url)
+    if not api_key or not target:
+        return None, [], ""
+    country = os.environ.get("AHREFS_COUNTRY", "gb")
+    today = date.today().isoformat()
+    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+
+    def gbp(cents):
+        return round((cents or 0) / 100 * USD_TO_GBP, 2)
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, headers=headers) as client:
+            base = {"mode": "subdomains", "country": country, "date": today}
+            m = (await _get(client, "/site-explorer/metrics", {**base, "target": target})).get("metrics") or {}
+            pages = (await _get(client, "/site-explorer/paid-pages", {
+                **base, "target": target, "select": "url,top_keyword,top_keyword_volume,sum_traffic,value",
+                "order_by": "sum_traffic:desc", "limit": 25,
+            })).get("pages") or []
+            comps = (await _get(client, "/site-explorer/organic-competitors", {
+                **base, "target": target, "select": "competitor_domain,keywords_common",
+                "order_by": "share:desc", "limit": competitor_limit,
+            })).get("competitors") or []
+            breakdown = []
+            for c in comps:
+                dom = c.get("competitor_domain")
+                if not dom:
+                    continue
+                cm = (await _get(client, "/site-explorer/metrics", {**base, "target": dom})).get("metrics") or {}
+                if (cm.get("paid_keywords") or 0) > 0:
+                    breakdown.append({
+                        "domain": dom,
+                        "common_keywords": c.get("keywords_common"),
+                        "monthly_paid_keywords": int(cm.get("paid_keywords") or 0),
+                        "monthly_paid_clicks": int(cm.get("paid_traffic") or 0),
+                        "monthly_ad_budget": gbp(cm.get("paid_cost")),
+                    })
+            breakdown.sort(key=lambda b: b["monthly_ad_budget"], reverse=True)
+    except Exception as e:
+        return None, [f"Ahrefs API paid search estimate failed ({_why(e)})."], ""
+
+    paid_kw = int(m.get("paid_keywords") or 0)
+    paid_clicks = int(m.get("paid_traffic") or 0)
+    spend = gbp(m.get("paid_cost"))
+    seen, top_keywords = set(), []
+    for p in pages:
+        kw = (p.get("top_keyword") or "").strip()
+        if kw and kw.lower() not in seen:
+            seen.add(kw.lower())
+            top_keywords.append({"keyword": kw, "search_volume": int(p.get("top_keyword_volume") or 0)})
+
+    data = {
+        "keywords": {
+            "status": "success",
+            "total_keywords": paid_kw,
+            "estimated_monthly_spend": spend,
+            "spend_by_match_type": {},
+            "average_cpc": round(spend / paid_clicks, 2) if paid_clicks else None,
+            "total_monthly_clicks": paid_clicks,
+            "top_keywords": top_keywords,
+            "methodology_note": (
+                "Estimated from Ahrefs' paid search data (domain totals + top keyword per paid landing page). "
+                "Ahrefs tracks far fewer paid keywords than a dedicated PPC tool, so these figures usually "
+                "understate real campaigns - upload SpyFu exports for a full picture. "
+                f"Spend converted from USD at {USD_TO_GBP}."
+            ),
+        },
+        "competitor_share": {
+            "status": "success",
+            "total_competitors_analyzed": len(comps),
+            "competitor_share_breakdown": breakdown,
+        },
+        "data_source": "ahrefs_estimate",
+    }
+    detail = (
+        f"Estimate for {target}: {paid_kw} paid keywords, ~{paid_clicks:,} paid clicks/month, ~£{spend:,.0f}/month. "
+        f"Competitors = organic competitors with paid activity ({len(breakdown)} of {len(comps)}). "
+        "Ahrefs tracks limited paid data, so this usually understates real campaigns."
+    )
+    return data, [], detail
 
 
 def _why(e: Exception) -> str:

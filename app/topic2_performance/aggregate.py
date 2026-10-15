@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, UploadFile
 
-from app.common.audit_helpers import envelope, normalize_url, safe_check
+from app.common.audit_helpers import envelope, normalize_url, safe_check, source, extra
 from app.topic2_performance.services.screaming_frog_service import (
     analyze_metadata_csv,
     fetch_core_web_vitals_both,
@@ -53,8 +53,17 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_by
             metadata = analyze_metadata_csv(csv_bytes)
         except Exception as e:
             warnings.append(f"Screaming Frog CSV parse failed: {e}")
+
+    sources = [source("Live page fetch", "live", "Page weight and load time measured live from the homepage.")]
+    extras = []
+    if cwv_mobile or cwv_desktop:
+        sources.append(source("Google PageSpeed Insights API", "api", "Lighthouse Core Web Vitals, mobile and desktop."))
     else:
-        warnings.append("No Screaming Frog CSV uploaded - title/meta/status-code breakdown unavailable.")
+        extras.append(extra("Core Web Vitals (PageSpeed)", "unavailable", "PageSpeed Insights didn't return data for this run."))
+    if csv_bytes:
+        sources.append(source("Screaming Frog CSV", "csv", "Internal HTML export - titles, meta descriptions, status codes, indexability."))
+    else:
+        extras.append(extra("Screaming Frog CSV", "missing", "Upload the Internal HTML export for the title/meta/status-code breakdown."))
 
     data = {
         "topic": "Topic 2: Performance & On-Page Metrics Audit",
@@ -65,7 +74,7 @@ async def run_full_audit(target_url: str = "https://www.bowlerhat.co.uk", csv_by
         "metadata_analysis": metadata,
     }
 
-    return envelope("Topic 2: Performance & On-Page Metrics Audit", data, warnings)
+    return envelope("Topic 2: Performance & On-Page Metrics Audit", data, warnings, sources=sources, extras=extras)
 
 
 @router.get("/audit", summary="Run Topic 2 Audit directly (no CSV)")

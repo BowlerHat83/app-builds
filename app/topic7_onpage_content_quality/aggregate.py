@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, UploadFile
 
-from app.common.audit_helpers import envelope, normalize_url, safe_check
+from app.common.audit_helpers import envelope, normalize_url, safe_check, source, extra
 from app.topic7_onpage_content_quality.services.form_detection_service import (
     FormDetectionService,
     select_candidate_form_pages,
@@ -62,13 +62,21 @@ async def run_full_audit(
     form_visual_breakdowns = None
     form_placement_guidance = []
 
-    if not enable_form_screenshots:
-        warnings.append(
-            "Form detection, screenshots, CTA counts and placement guidance weren't enabled for this "
-            "audit run (opt-in on the intake screen, off by default because this crawl has crashed the "
-            "live backend under memory pressure before). Thin content results above are unaffected."
-        )
+    sources, extras = [], []
+    if csv_bytes:
+        sources.append(source("Screaming Frog CSV", "csv", "Internal HTML export - word counts for thin content, and candidate form pages."))
     else:
+        sources.append(source("Live homepage fetch", "live", "Thin content checked from the live site only."))
+        extras.append(extra("Screaming Frog CSV", "missing", "Upload the Internal HTML export to check thin content across every page."))
+
+    if not enable_form_screenshots:
+        extras.append(extra(
+            "Form detection & screenshots", "off",
+            "Opt-in on the intake screen (off by default - the crawl is memory-heavy). Thin content results are unaffected.",
+        ))
+    else:
+        sources.append(source("Live form crawl", "live", "Headless-browser crawl of likely form pages for forms, CTAs and screenshots."))
+        extras.append(extra("Form detection & screenshots", "included", "Crawled likely form pages (up to 30)."))
         page_selection = select_candidate_form_pages(url, csv_bytes, max_pages=30)
         candidate_urls = page_selection["candidate_urls"]
 
@@ -119,7 +127,7 @@ async def run_full_audit(
         "form_placement_guidance": form_placement_guidance,
     }
 
-    return envelope("Topic 7: On-Page Content Quality Audit", data, warnings)
+    return envelope("Topic 7: On-Page Content Quality Audit", data, warnings, sources=sources, extras=extras)
 
 
 @router.post("/audit-all", summary="Run Topic 7 Audit")

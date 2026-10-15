@@ -161,7 +161,7 @@ async def run_master_audit(
         ),
         _safe(run_topic4_audit(facts_bytes=ai_facts_bytes, sources_bytes=ai_sources_bytes, target_url=target_url), "Topic 4"),
         _safe(
-            run_topic5_audit(ppc_keywords_bytes=ppc_keywords_bytes, ppc_competitors_bytes=ppc_competitors_bytes),
+            run_topic5_audit(ppc_keywords_bytes=ppc_keywords_bytes, ppc_competitors_bytes=ppc_competitors_bytes, target_url=target_url),
             "Topic 5",
         ),
         _safe(run_topic7_audit(target_url=target_url, csv_bytes=sf_bytes), "Topic 7"),

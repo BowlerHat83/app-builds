@@ -1,4 +1,4 @@
-﻿import re
+import re
 import httpx
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
@@ -17,7 +17,7 @@ class URLExtractorService:
         fallback_name = domain.split(".")[0].replace("-", " ").replace("_", " ").title()
         
         extracted_name = fallback_name
-        extracted_location = "London"  # Default fallback location
+        extracted_location = None  # no fabricated default - an unknown location is reported as unknown
         extracted_keywords = [fallback_name]
 
         try:
@@ -42,10 +42,9 @@ class URLExtractorService:
                             break
 
                     # 3. Generate baseline keywords
-                    extracted_keywords = [
-                        extracted_name,
-                        f"{extracted_name} {extracted_location}"
-                    ]
+                    extracted_keywords = [extracted_name] + (
+                        [f"{extracted_name} {extracted_location}"] if extracted_location else []
+                    )
         except Exception:
             pass # Gracefully fall back to domain-based inference
 

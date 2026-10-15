@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, UploadFile
 
-from app.common.audit_helpers import envelope, normalize_url, safe_check
+from app.common.audit_helpers import envelope, normalize_url, safe_check, source, extra
 from app.topic6_local_visibility.services.gbp_review_service import GBPReviewService
 from app.topic6_local_visibility.services.local_service import LocalVisibilityService
 from app.topic6_local_visibility.services.screenshot_service import GBPScreenshotService
@@ -180,6 +180,23 @@ def build_topic6_keywords(
     return keywords
 
 
+def _audit_inputs(business_name, target_location, core_offering, input_sources: dict) -> list:
+    """The three inputs Topic 6 actually ran with, and where each came from - shown at the top of the Topic 6 tab."""
+    rows = []
+    for key, label, value in (
+        ("business_name", "Business name", business_name),
+        ("target_location", "Location", target_location),
+        ("core_offering", "Core offering", core_offering),
+    ):
+        rows.append({
+            "key": key,
+            "label": label,
+            "value": value or None,
+            "source": input_sources.get(key) or ("Entered manually" if value else "Not found"),
+        })
+    return rows
+
+
 async def run_full_audit(
     business_name: Optional[str] = None,
     target_location: Optional[str] = None,
@@ -190,6 +207,7 @@ async def run_full_audit(
     organic_keywords: Optional[list] = None,
     prewarm_job: Optional[dict] = None,
     enable_screenshot: bool = False,
+    input_sources: Optional[dict] = None,
     **_ignored,
 ) -> dict:
     """
@@ -216,6 +234,7 @@ async def run_full_audit(
     explicitly chooses to spend the memory budget on it for a given run.
     """
     warnings: list = []
+    input_sources = dict(input_sources or {})
 
     # Topic 6 only runs at all when a BrightLocal Citation Tracker CSV was
     # uploaded - previously map-pack rank, reviews, and the GBP screenshot
@@ -226,24 +245,24 @@ async def run_full_audit(
     # No CSV uploaded? Try the BrightLocal API before giving up (only does
     # anything when BRIGHTLOCAL_API_KEY is set - see
     # app/common/integrations/brightlocal.py). An uploaded CSV always wins.
-    if not brightlocal_bytes:
+    sources, extras = [], []
+    if brightlocal_bytes:
+        sources.append(source("BrightLocal Citation Tracker CSV", "csv", "Uploaded export - citations, NAP accuracy, opportunities."))
+    else:
         brightlocal_bytes, bl_note = await fetch_citation_tracker_csv(
             business_name=business_name, target_url=target_url, target_location=target_location
         )
-        if bl_note:
-            warnings.append(bl_note)
+        if brightlocal_bytes:
+            sources.append(source("BrightLocal Citation Tracker (API)", "api", bl_note or "Pulled from BrightLocal."))
 
     if not brightlocal_bytes:
-        return envelope(
-            "Topic 6: Local Visibility Audit",
-            {},
-            warnings
-            + [
-                "No BrightLocal Citation Tracker data for this run (no CSV uploaded, and nothing pulled from the "
-                "BrightLocal API) - Topic 6 only runs when citation data is available. Upload the Citation "
-                "Tracker CSV to get citation data, map-pack rank, reviews, and the optional GBP screenshot."
-            ],
-        )
+        extras.append(extra(
+            "BrightLocal Citation Tracker", "missing",
+            (bl_note + " " if bl_note else "")
+            + "Topic 6 runs once citation data is available - upload the Citation Tracker CSV, or set up a "
+            "Citation Tracker report for this business in BrightLocal.",
+        ))
+        return envelope("Topic 6: Local Visibility Audit", {}, warnings, sources=sources, extras=extras)
 
     api_key = os.environ.get("SERPAPI_KEY")
 
@@ -254,15 +273,16 @@ async def run_full_audit(
         if infer_warn:
             warnings.append(infer_warn)
         if inferred:
-            business_name = business_name or inferred.get("business_name")
-            target_location = target_location or inferred.get("location")
+            if not business_name and inferred.get("business_name"):
+                business_name = inferred["business_name"]
+                input_sources["business_name"] = "Auto-detected from website (during the audit)"
+            if not target_location and inferred.get("location"):
+                target_location = inferred["location"]
+                input_sources["target_location"] = "Auto-detected from website (during the audit)"
 
     if not business_name or not target_location:
-        return envelope(
-            "Topic 6: Local Visibility Audit",
-            {},
-            warnings + ["business_name and target_location are required (or supply target_url so they can be auto-detected)."],
-        )
+        extras.append(extra("Business name & location", "missing", "Needed for map-pack rank and reviews (couldn't auto-detect them from the site)."))
+        return envelope("Topic 6: Local Visibility Audit", {}, warnings, sources=sources, extras=extras)
 
     if core_offering:
         # Core-offering-based keywords only - the business name alone and
@@ -273,13 +293,14 @@ async def run_full_audit(
         # above for why, including how this is what surfaces real
         # local/city/region-scale variety when it exists.
         keywords = build_topic6_keywords(core_offering, business_name, organic_keywords)
-        if not organic_keywords:
-            warnings.append(
-                "No Ahrefs Organic Keywords CSV was uploaded for this run, so the map-pack keyword set is "
-                "built entirely from Core Offering wording templates rather than also including real "
-                "customer search terms - upload it for genuine local/city/region geographic variety instead "
-                "of just wording variations on the same location."
-            )
+        extras.append(extra("Core Offering", "included", f"Map-pack keywords built around '{core_offering}'."))
+        if organic_keywords:
+            extras.append(extra("Real search terms for map-pack check", "included", "Topic 6 keywords include real organic keywords from Ahrefs."))
+        else:
+            extras.append(extra(
+                "Real search terms for map-pack check", "missing",
+                "No Ahrefs organic keywords this run, so map-pack keywords are wording variations of the Core Offering only.",
+            ))
     else:
         # No Core Offering supplied for this run - fall back to the old
         # branded-seed behaviour (still real data, just skewed toward
@@ -293,12 +314,11 @@ async def run_full_audit(
             for kw in extra_keywords:
                 if kw and kw not in keywords:
                     keywords.append(kw)
-        warnings.append(
-            "No Core Offering supplied for this run, so map-pack rank was tested against the business "
-            "name instead of real customer search terms - a branded query almost always already ranks, "
-            "which tends to make this score look better than actual local visibility. Add a Core Offering "
-            "on the intake screen (e.g. \"kitchen showroom\") for a more representative average."
-        )
+        extras.append(extra(
+            "Core Offering", "missing",
+            "Map-pack rank was tested against the business name, which almost always ranks - add a Core Offering "
+            "(e.g. 'kitchen showroom') on the intake screen for a more representative result.",
+        ))
 
     citations = None
     if brightlocal_bytes:
@@ -307,8 +327,6 @@ async def run_full_audit(
         )
         if citations_warn:
             warnings.append(citations_warn)
-    else:
-        warnings.append("No BrightLocal CSV uploaded - citation/NAP metrics unavailable.")
 
     # fetch_map_pack_position now runs its keyword lookups concurrently
     # instead of one at a time (see local_service.py) - this was timing out
@@ -353,17 +371,20 @@ async def run_full_audit(
         screenshot, screenshot_warn = await safe_check(screenshot_awaitable, "GBP screenshot capture", timeout=130)
         if screenshot_warn:
             warnings.append(screenshot_warn)
+    if enable_screenshot:
+        extras.append(extra("Google Business Profile screenshot", "included" if screenshot else "unavailable",
+                            "Captured live." if screenshot else "Enabled, but the capture didn't complete this run."))
     else:
-        warnings.append(
-            "GBP screenshot capture wasn't enabled for this audit run (opt-in on the intake screen) - "
-            "no screenshot was taken."
-        )
+        extras.append(extra("Google Business Profile screenshot", "off", "Opt-in on the intake screen."))
 
-    if not api_key:
-        warnings.append("SERPAPI_KEY not configured - map-pack rank and review data are unavailable rather than estimated.")
+    if api_key:
+        sources.append(source("SerpApi (Google Maps)", "api", f"Live map-pack rank across {len(keywords)} keywords, plus Google reviews."))
+    else:
+        extras.append(extra("Map-pack rank & reviews", "unavailable", "SerpApi key not configured on the server."))
 
     data = {
         "topic": "Topic 6: Local Visibility Audit",
+        "audit_inputs": _audit_inputs(business_name, target_location, core_offering, input_sources),
         "business_name": business_name,
         "location": target_location,
         "core_offering": core_offering,
@@ -373,7 +394,7 @@ async def run_full_audit(
         "profile_screenshot": screenshot,
     }
 
-    return envelope("Topic 6: Local Visibility Audit", data, warnings)
+    return envelope("Topic 6: Local Visibility Audit", data, warnings, sources=sources, extras=extras)
 
 
 @router.post("/audit-all", summary="Run Topic 6 Audit")

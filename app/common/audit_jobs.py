@@ -104,7 +104,8 @@ async def _run_topic(coro, topic_label: str) -> dict:
 
 
 async def _run_topic6(
-    t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes, enable_screenshot, core_offering
+    t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes, enable_screenshot, core_offering,
+    input_sources=None,
 ) -> dict:
     """
     Topic 6 always waits on Topic 3 (organic keywords) first, whether or
@@ -149,6 +150,7 @@ async def _run_topic6(
                 core_offering=core_offering,
                 organic_keywords=organic_keywords,
                 enable_screenshot=enable_screenshot,
+                input_sources=input_sources,
             ),
             _TOPIC_LABELS["topic6_local_visibility"],
         )
@@ -174,6 +176,7 @@ def create_audit_job(
     brightlocal_bytes: Optional[bytes] = None,
     enable_topic6_screenshot: bool = False,
     enable_topic7_screenshots: bool = False,
+    input_sources: Optional[dict] = None,
 ) -> str:
     """
     Kicks off all 7 topics as independent background tasks and returns a
@@ -208,7 +211,7 @@ def create_audit_job(
     )
     t5_task = asyncio.create_task(
         _run_topic(
-            run_topic5_audit(ppc_keywords_bytes=ppc_keywords_bytes, ppc_competitors_bytes=ppc_competitors_bytes),
+            run_topic5_audit(ppc_keywords_bytes=ppc_keywords_bytes, ppc_competitors_bytes=ppc_competitors_bytes, target_url=target_url),
             _TOPIC_LABELS["topic5_paid_visibility"],
         )
     )
@@ -221,7 +224,7 @@ def create_audit_job(
     t6_task = asyncio.create_task(
         _run_topic6(
             t3_task, t4_task, t5_task, business_name, target_location, target_url, brightlocal_bytes,
-            enable_topic6_screenshot, core_offering,
+            enable_topic6_screenshot, core_offering, input_sources,
         )
     )
 

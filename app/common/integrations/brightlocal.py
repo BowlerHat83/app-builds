@@ -119,6 +119,32 @@ def _rows_from_json(results: Dict[str, Any]) -> bytes:
     return out.getvalue().encode("utf-8")
 
 
+def clean_report_name(name: Optional[str]) -> str:
+    """'M2 Consulting (M2CONSULTING-B32AA)' -> 'M2 Consulting'; 'Pure Staff Birmingham,PURESTAFFBIR-B13HN' -> 'Pure Staff Birmingham'."""
+    if not name:
+        return ""
+    name = re.sub(r"\s*\(.*?\)\s*$", "", str(name))
+    name = re.sub(r",\s*[A-Z0-9][A-Z0-9 .-]*$", "", name)
+    return name.strip()
+
+
+async def find_report(
+    target_url: Optional[str], business_name: Optional[str] = None, target_location: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Just the matching Citation Tracker report (or None) - used by business detection on the intake screen."""
+    api_key = os.environ.get("BRIGHTLOCAL_API_KEY")
+    if not api_key:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+            resp = await client.get(f"{BASE_URL}/ct/get-all", params={"api-key": api_key})
+            resp.raise_for_status()
+            reports = ((resp.json() or {}).get("response") or {}).get("results") or []
+            return _pick_report(reports, business_name, target_url, target_location)
+    except Exception:
+        return None
+
+
 async def fetch_citation_tracker_csv(
     business_name: Optional[str] = None,
     target_url: Optional[str] = None,

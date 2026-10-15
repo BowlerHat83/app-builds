@@ -15,7 +15,9 @@ from app.topic4_ai_visibility.aggregate import router as t4_router
 from app.topic5_paid_visibility.aggregate import router as t5_router
 from app.topic6_local_visibility.aggregate import router as t6_router
 from app.topic7_onpage_content_quality.aggregate import router as t7_router
+from fastapi import Form
 from app.common.integrations import integration_status
+from app.common.integrations.detect import detect_business
 
 app = FastAPI(
     title="SEO Audit Platform API",
@@ -51,6 +53,16 @@ app.include_router(t4_router, prefix="/topic4", tags=["Topic 4: AI Visibility"])
 app.include_router(t5_router, prefix="/topic5", tags=["Topic 5: Paid Visibility"])
 app.include_router(t6_router, prefix="/topic6", tags=["Topic 6: Local Visibility"])
 app.include_router(t7_router, prefix="/topic7", tags=["Topic 7: Content Quality"])
+
+@app.post("/detect-business", tags=["System"])
+async def detect(target_url: str = Form(..., description="Target website URL")):
+    """
+    Intake screen 1 -> 2: infer business name, location and core offering
+    from the URL (BrightLocal report, the site's structured data, Google
+    Business Profile category). Each value is returned with its source.
+    """
+    return await detect_business(target_url)
+
 
 @app.get("/integrations", tags=["System"])
 async def integrations():

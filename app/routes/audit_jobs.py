@@ -7,6 +7,16 @@ from app.common.audit_jobs import create_audit_job, get_job_status
 router = APIRouter()
 
 
+def _parse_sources(raw: Optional[str]) -> dict:
+    import json
+
+    try:
+        val = json.loads(raw) if raw else {}
+        return {k: str(v) for k, v in val.items() if v} if isinstance(val, dict) else {}
+    except Exception:
+        return {}
+
+
 @router.post(
     "/audit-start",
     tags=["Master Audit"],
@@ -28,6 +38,7 @@ async def start_audit_job(
     brightlocal_csv: Optional[UploadFile] = File(None, description="BrightLocal Citation Tracker export - feeds Topic 6"),
     enable_topic6_screenshot: bool = Form(False, description="Capture a real Google Business Profile screenshot for Topic 6 (opt-in - real-browser page load, adds memory/time cost)"),
     enable_topic7_screenshots: bool = Form(False, description="Crawl for and screenshot forms for Topic 7 (opt-in - real-browser crawl across up to 30 pages, adds memory/time cost)"),
+    input_sources: Optional[str] = Form(None, description='JSON: where business_name / target_location / core_offering came from, e.g. {"business_name": "BrightLocal Citation Tracker report"} or "Edited by user" - shown on Topic 6'),
 ):
     """
     Starts all 7 topics running as independent background tasks and returns
@@ -79,6 +90,7 @@ async def start_audit_job(
         brightlocal_bytes=brightlocal_bytes,
         enable_topic6_screenshot=enable_topic6_screenshot,
         enable_topic7_screenshots=enable_topic7_screenshots,
+        input_sources=_parse_sources(input_sources),
     )
 
     return get_job_status(job_id)

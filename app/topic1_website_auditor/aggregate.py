@@ -5,7 +5,7 @@ from typing import Optional
 from dateutil import parser as date_parser
 from fastapi import APIRouter
 
-from app.common.audit_helpers import envelope, normalize_url, safe_check
+from app.common.audit_helpers import envelope, normalize_url, safe_check, source
 from app.topic1_website_auditor.services.ssl_service import check_ssl_certificate
 from app.topic1_website_auditor.services.sitemap_service import discover_sitemap_url, fetch_sitemap_urls_with_lastmod
 from app.topic1_website_auditor.services.wcag_service import fetch_and_audit_wcag
@@ -169,7 +169,12 @@ async def run_full_audit(
         "gdpr_compliance": gdpr_result.model_dump() if gdpr_result else None,
     }
 
-    return envelope("Topic 1: Technical, Security & Standards Audit", data, warnings)
+    sources = [
+        source("Live site checks", "live", "SSL certificate, sitemap discovery and HTML validation run against the live site."),
+        source("WCAG scan (axe-core)", "live", "Automated accessibility scan of the live homepage in a headless browser."),
+        source("Cookie/GDPR check", "live", "Live check for a cookie-consent banner and pre-consent tracking."),
+    ]
+    return envelope("Topic 1: Technical, Security & Standards Audit", data, warnings, sources=sources)
 
 
 @router.get("/audit", summary="Run Topic 1 Audit directly")

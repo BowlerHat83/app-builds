@@ -21,4 +21,9 @@ def integration_status() -> dict:
         "ahrefs_backlinks_csv": ah,
         "ahrefs_keywords_csv": ah,
         "ahrefs_competitors_csv": ah,
+        # Topic 5 falls back to an Ahrefs-based estimate when no SpyFu
+        # exports are uploaded - flagged separately so the intake screen can
+        # show it as partial cover rather than a full replacement.
+        "ppc_keywords_csv": "estimate" if ah else False,
+        "ppc_competitors_csv": "estimate" if ah else False,
     }

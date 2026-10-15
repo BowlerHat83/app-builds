@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 import pandas as pd
 from fastapi import APIRouter, File, UploadFile
 
-from app.common.audit_helpers import envelope
+from app.common.audit_helpers import envelope, source, extra
 from app.common.integrations.ahrefs import fetch_ahrefs_data
 from app.topic3_ahrefs_auditor.services.branded_traffic_service import calculate_branded_traffic_breakdown
 from app.topic3_ahrefs_auditor.services.competitor_share_service import parse_competitor_share_csv
@@ -75,24 +75,30 @@ async def run_full_audit(
     # ahrefs.py). Uploaded CSVs always win. Backlinks come back as a ready-
     # made summary (real live totals) rather than CSV bytes.
     api_backlinks_summary = None
-    api, api_notes = await fetch_ahrefs_data(
+    sources, extras = [], []
+    uploaded = {"backlinks": bool(backlinks_bytes), "keywords": bool(keywords_bytes), "competitors": bool(competitors_bytes)}
+    api, api_notes, api_sources = await fetch_ahrefs_data(
         target_url,
         need_keywords=not keywords_bytes,
         need_competitors=not competitors_bytes,
         need_backlinks=not backlinks_bytes,
     )
-    warnings.extend(api_notes)
+    warnings.extend(api_notes)  # only genuine API failures land here now
+    labels = {"backlinks": "Ahrefs Backlinks", "keywords": "Ahrefs Organic Keywords", "competitors": "Ahrefs Organic Competitors"}
+    for key, label in labels.items():
+        if uploaded[key]:
+            sources.append(source(f"{label} CSV", "csv", "Uploaded export."))
+        elif key in api_sources:
+            sources.append(source(f"{label} (Ahrefs API)", "api", api_sources[key]))
+        else:
+            extras.append(extra(f"{label} CSV", "missing", "Not uploaded, and not available from the Ahrefs API for this run."))
     keywords_bytes = keywords_bytes or api.get("keywords_bytes")
     competitors_bytes = competitors_bytes or api.get("competitors_bytes")
     if not backlinks_bytes:
         api_backlinks_summary = api.get("backlinks_summary")
 
     if not any([backlinks_bytes, keywords_bytes, competitors_bytes, api_backlinks_summary]):
-        return envelope(
-            "Topic 3: Off-Page & Organic Visibility Audit",
-            data,
-            ["No Ahrefs exports provided (backlinks / organic keywords / organic competitors)."],
-        )
+        return envelope("Topic 3: Off-Page & Organic Visibility Audit", {}, warnings, sources=sources, extras=extras)
 
     if backlinks_bytes:
         try:
@@ -138,8 +144,6 @@ async def run_full_audit(
             warnings.append(f"Backlinks CSV parse failed: {e}")
     elif api_backlinks_summary:
         data["backlinks_summary"] = api_backlinks_summary
-    else:
-        warnings.append("No Ahrefs Backlinks CSV uploaded.")
 
     if keywords_bytes:
         for key, fn in (
@@ -168,8 +172,6 @@ async def run_full_audit(
                 "Ahrefs' Organic Keywords export doesn't include real month-by-month history. "
                 "Use an Ahrefs 'Traffic history' export for exact monthly figures."
             )
-    else:
-        warnings.append("No Ahrefs Organic Keywords CSV uploaded - keyword position, top keywords, content gaps, branded traffic and traffic/impressions are unavailable.")
 
     if competitors_bytes:
         for key, fn in (
@@ -180,10 +182,8 @@ async def run_full_audit(
             data[key] = result
             if warn:
                 warnings.append(warn)
-    else:
-        warnings.append("No Ahrefs Organic Competitors CSV uploaded - Domain Rating and competitor share are unavailable.")
 
-    return envelope("Topic 3: Off-Page & Organic Visibility Audit", data, warnings)
+    return envelope("Topic 3: Off-Page & Organic Visibility Audit", data, warnings, sources=sources, extras=extras)
 
 
 @router.post("/audit-all", summary="Run Topic 3 Audit with Ahrefs exports")
