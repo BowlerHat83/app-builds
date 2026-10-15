@@ -107,7 +107,11 @@ async def _gbp_category(name: str, location: Optional[str]) -> Optional[str]:
         candidates = [data.get("place_results") or {}] + list(data.get("local_results") or [])
         for c in candidates:
             if c and lname in str(c.get("title") or "").lower():
-                cat = c.get("type") or (c.get("types") or [None])[0]
+                cat = c.get("type") or c.get("types")
+                # SerpApi returns either a single category string or a list of
+                # categories (primary first) - always use just the primary one
+                if isinstance(cat, (list, tuple)):
+                    cat = next((x for x in cat if x), None)
                 if cat:
                     return str(cat).strip()
     except Exception:
